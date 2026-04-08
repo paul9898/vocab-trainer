@@ -11,5 +11,6 @@ backend/data/tts_cache/
 backend/data/reviews/
 frontend/node_modules/
 frontend/dist/
+frontend/*.tsbuildinfo
 files/
 files.zip
