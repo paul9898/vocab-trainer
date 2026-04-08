@@ -1,0 +1,1 @@
+"""Thai vocab backend package."""

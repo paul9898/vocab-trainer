@@ -1,0 +1,38 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color: #1a1a1a;
+  background:
+    radial-gradient(circle at top, rgba(240, 160, 75, 0.18), transparent 28%),
+    radial-gradient(circle at right, rgba(122, 185, 181, 0.18), transparent 24%),
+    linear-gradient(180deg, #fffdf8 0%, #f5efe4 100%);
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.glass-panel {
+  background: rgba(255, 253, 248, 0.78);
+  backdrop-filter: blur(18px);
+  border: 1px solid rgba(26, 26, 26, 0.08);
+}
+
+.chip-scrollbar::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+
+.chip-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(26, 26, 26, 0.15);
+  border-radius: 999px;
+}
