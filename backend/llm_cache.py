@@ -26,6 +26,7 @@ def _shuffle_cached_options(options: list[str], correct_value: str) -> tuple[lis
 async def get_cached_question(
     db: aiosqlite.Connection,
     *,
+    profile_id: str,
     word_id: str,
     mastery_level: int,
 ) -> dict[str, Any] | None:
@@ -34,9 +35,9 @@ async def get_cached_question(
             """
             SELECT question_type, prompt_text, options_json, correct_value
             FROM cached_questions
-            WHERE word_id = ? AND mastery_level = ?
+            WHERE profile_id = ? AND word_id = ? AND mastery_level = ?
             """,
-            (word_id, mastery_level),
+            (profile_id, word_id, mastery_level),
         )
     ).fetchone()
     payload = _row_to_dict(row)
@@ -63,6 +64,7 @@ async def get_cached_question(
 async def set_cached_question(
     db: aiosqlite.Connection,
     *,
+    profile_id: str,
     word_id: str,
     mastery_level: int,
     question: dict[str, Any],
@@ -75,10 +77,10 @@ async def set_cached_question(
     await db.execute(
         """
         INSERT INTO cached_questions (
-          word_id, mastery_level, question_type, prompt_text,
+          profile_id, word_id, mastery_level, question_type, prompt_text,
           options_json, correct_value, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(word_id, mastery_level)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(profile_id, word_id, mastery_level)
         DO UPDATE SET
           question_type = excluded.question_type,
           prompt_text = excluded.prompt_text,
@@ -87,6 +89,7 @@ async def set_cached_question(
           updated_at = excluded.updated_at
         """,
         (
+            profile_id,
             word_id,
             mastery_level,
             str(question["question_type"]),
@@ -95,6 +98,21 @@ async def set_cached_question(
             options[correct_index],
             int(time.time()),
         ),
+    )
+    await db.commit()
+
+
+async def clear_cached_questions(
+    db: aiosqlite.Connection,
+    *,
+    profile_id: str,
+) -> None:
+    await db.execute(
+        """
+        DELETE FROM cached_questions
+        WHERE profile_id = ?
+        """,
+        (profile_id,),
     )
     await db.commit()
 

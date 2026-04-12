@@ -18,6 +18,7 @@ let activeRequestToken = 0;
 let activeUtterance: SpeechSynthesisUtterance | null = null;
 const serverAudioCache = new Map<string, Blob>();
 const preloadPromises = new Map<string, Promise<void>>();
+let ttsLifecycleBound = false;
 let currentStatus: TTSStatus = {
   state: "idle",
   provider: TTS_PROVIDER === "server" ? "server" : "browser",
@@ -64,6 +65,19 @@ function getServerAudioCacheKey(text: string, mode: SpeechMode): string {
   return `${mode}:${text.trim()}`;
 }
 
+function canPlayAudio(): boolean {
+  if (typeof document === "undefined") {
+    return true;
+  }
+  if (document.hidden) {
+    return false;
+  }
+  if (typeof document.hasFocus === "function" && !document.hasFocus()) {
+    return false;
+  }
+  return true;
+}
+
 export function stopSpeaking(): void {
   stopBrowserSpeech();
   stopServerSpeech();
@@ -74,6 +88,23 @@ export function stopSpeaking(): void {
   });
 }
 
+function bindTTSLifecycle(): void {
+  if (ttsLifecycleBound || typeof window === "undefined" || typeof document === "undefined") {
+    return;
+  }
+  ttsLifecycleBound = true;
+
+  const stopForBackgroundState = () => {
+    if (!canPlayAudio()) {
+      stopSpeaking();
+    }
+  };
+
+  document.addEventListener("visibilitychange", stopForBackgroundState);
+  window.addEventListener("blur", stopForBackgroundState);
+  window.addEventListener("pagehide", stopForBackgroundState);
+}
+
 function speakInBrowser(text: string, rate = 0.85, message = "Playing browser audio."): Promise<void> {
   if (!window.speechSynthesis) {
     setTTSStatus({
@@ -82,6 +113,14 @@ function speakInBrowser(text: string, rate = 0.85, message = "Playing browser au
       message: "Browser speech is unavailable.",
     });
     return Promise.reject(new Error("Browser speech is unavailable."));
+  }
+  if (!canPlayAudio()) {
+    setTTSStatus({
+      state: "idle",
+      provider: "browser",
+      message: "Audio paused while the app is unfocused.",
+    });
+    return Promise.resolve();
   }
 
   stopSpeaking();
@@ -169,6 +208,15 @@ async function ensureServerAudioCached(text: string, mode: SpeechMode): Promise<
 }
 
 async function speakViaServer(text: string, mode: SpeechMode): Promise<void> {
+  if (!canPlayAudio()) {
+    setTTSStatus({
+      state: "idle",
+      provider: "server",
+      message: "Audio paused while the app is unfocused.",
+    });
+    return;
+  }
+
   stopSpeaking();
   const trimmed = text.trim();
   const cacheKey = getServerAudioCacheKey(trimmed, mode);
@@ -214,6 +262,10 @@ async function speakViaServer(text: string, mode: SpeechMode): Promise<void> {
   if (requestToken !== activeRequestToken) {
     return;
   }
+  if (!canPlayAudio()) {
+    stopSpeaking();
+    return;
+  }
   const objectUrl = URL.createObjectURL(blob);
   activeAudioUrl = objectUrl;
 
@@ -242,6 +294,10 @@ async function speakViaServer(text: string, mode: SpeechMode): Promise<void> {
 }
 
 export function speak(text: string, rate = 0.85, mode: SpeechMode = "sentence"): void {
+  if (!text.trim()) {
+    return;
+  }
+  bindTTSLifecycle();
   if (TTS_PROVIDER === "server") {
     void speakViaServer(text, mode).catch((error: unknown) => {
       if (error instanceof DOMException && error.name === "AbortError") {

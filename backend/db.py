@@ -108,6 +108,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 
 CREATE TABLE IF NOT EXISTS cached_questions (
+  profile_id    TEXT NOT NULL,
   word_id       TEXT NOT NULL,
   mastery_level INTEGER NOT NULL,
   question_type TEXT NOT NULL,
@@ -115,7 +116,8 @@ CREATE TABLE IF NOT EXISTS cached_questions (
   options_json  TEXT NOT NULL,
   correct_value TEXT NOT NULL,
   updated_at    INTEGER NOT NULL,
-  PRIMARY KEY (word_id, mastery_level),
+  PRIMARY KEY (profile_id, word_id, mastery_level),
+  FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE,
   FOREIGN KEY (word_id) REFERENCES words(id) ON DELETE CASCADE
 );
 
@@ -405,6 +407,54 @@ async def _migrate_sessions_table(db: aiosqlite.Connection) -> None:
         )
 
 
+async def _migrate_cached_questions_table(db: aiosqlite.Connection) -> None:
+    columns = await _table_columns(db, "cached_questions")
+    table_row = await (
+        await db.execute(
+            """
+            SELECT sql
+            FROM sqlite_master
+            WHERE type = 'table' AND name = 'cached_questions'
+            """
+        )
+    ).fetchone()
+    table_sql = (table_row["sql"] if table_row else "") or ""
+    if "profile_id" in columns and "PRIMARY KEY (profile_id, word_id, mastery_level)" in table_sql:
+        return
+
+    await db.execute("ALTER TABLE cached_questions RENAME TO cached_questions_legacy")
+    await db.execute(
+        """
+        CREATE TABLE cached_questions (
+          profile_id    TEXT NOT NULL,
+          word_id       TEXT NOT NULL,
+          mastery_level INTEGER NOT NULL,
+          question_type TEXT NOT NULL,
+          prompt_text   TEXT NOT NULL,
+          options_json  TEXT NOT NULL,
+          correct_value TEXT NOT NULL,
+          updated_at    INTEGER NOT NULL,
+          PRIMARY KEY (profile_id, word_id, mastery_level),
+          FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE,
+          FOREIGN KEY (word_id) REFERENCES words(id) ON DELETE CASCADE
+        )
+        """
+    )
+    await db.execute(
+        """
+        INSERT INTO cached_questions (
+          profile_id, word_id, mastery_level, question_type, prompt_text,
+          options_json, correct_value, updated_at
+        )
+        SELECT ?, word_id, mastery_level, question_type, prompt_text,
+               options_json, correct_value, updated_at
+        FROM cached_questions_legacy
+        """,
+        (DEFAULT_PROFILE_ID,),
+    )
+    await db.execute("DROP TABLE cached_questions_legacy")
+
+
 async def _create_indexes(db: aiosqlite.Connection) -> None:
     await db.executescript(
         """
@@ -432,8 +482,8 @@ async def _create_indexes(db: aiosqlite.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_sessions_profile_ended_at
         ON sessions (profile_id, ended_at);
 
-        CREATE INDEX IF NOT EXISTS idx_cached_questions_updated
-        ON cached_questions (updated_at);
+        CREATE INDEX IF NOT EXISTS idx_cached_questions_profile_updated
+        ON cached_questions (profile_id, updated_at);
 
         CREATE INDEX IF NOT EXISTS idx_cached_explanations_updated
         ON cached_explanations (updated_at);
@@ -456,6 +506,7 @@ async def init_db() -> None:
         await _migrate_mastery_table(db)
         await _migrate_attempts_table(db)
         await _migrate_sessions_table(db)
+        await _migrate_cached_questions_table(db)
         await _create_indexes(db)
         await db.commit()
     finally:

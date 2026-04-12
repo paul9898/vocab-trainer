@@ -7,10 +7,13 @@ import type {
   Profile,
   ProfileCreateRequest,
   QuestionResponse,
+  ScenarioVocabResponse,
   SessionCompleteResponse,
   SessionStartResponse,
   StoryResponse,
   StatsResponse,
+  WordImportResponse,
+  WordLabResponse,
   WordWithMastery,
 } from "./types";
 
@@ -25,6 +28,15 @@ async function fetchJson<T>(input: string, init?: RequestInit): Promise<T> {
     throw new Error(detail || `Request failed with ${response.status}`);
   }
   return response.json() as Promise<T>;
+}
+
+async function fetchBlob(input: string, init?: RequestInit): Promise<Blob> {
+  const response = await fetch(input, init);
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || `Request failed with ${response.status}`);
+  }
+  return response.blob();
 }
 
 function withProfileId(url: string, profileId?: string): string {
@@ -53,13 +65,22 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
+  exportProfile: (profileId: string) =>
+    fetchBlob(`${BASE}/profiles/${encodeURIComponent(profileId)}/export`),
+
   resetProfile: (profileId: string) =>
     fetchJson<{ status: string }>(`${BASE}/profiles/${encodeURIComponent(profileId)}/reset`, {
       method: "POST",
     }),
 
-  getSession: (profileId: string, length = 20) =>
-    fetchJson<SessionStartResponse>(withProfileId(`${BASE}/session?length=${length}`, profileId)),
+  getSession: (profileId: string, length = 20, allDue = false) => {
+    const params = new URLSearchParams();
+    params.set("length", String(length));
+    if (allDue) {
+      params.set("all_due", "true");
+    }
+    return fetchJson<SessionStartResponse>(withProfileId(`${BASE}/session?${params.toString()}`, profileId));
+  },
 
   getQuestion: (wordId: string, profileId: string, sessionId?: string) =>
     fetchJson<QuestionResponse>(
@@ -80,7 +101,89 @@ export const api = {
 
   getWords: (profileId: string) => fetchJson<WordWithMastery[]>(withProfileId(`${BASE}/words`, profileId)),
 
-  getStory: (profileId: string) => fetchJson<StoryResponse>(withProfileId(`${BASE}/story`, profileId)),
+  importWords: (
+    profileId: string,
+    body: { text: string; category?: string; difficulty?: string },
+  ) =>
+    fetchJson<WordImportResponse>(`${BASE}/words/import`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        profile_id: profileId,
+        text: body.text,
+        category: body.category ?? "general",
+        difficulty: body.difficulty ?? "social",
+      }),
+    }),
+
+  generateScenarioWords: (
+    profileId: string,
+    body: { scenario: string; difficulty?: string; focus?: string; count?: number; category?: string },
+  ) =>
+    fetchJson<ScenarioVocabResponse>(`${BASE}/words/scenario`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        profile_id: profileId,
+        scenario: body.scenario,
+        difficulty: body.difficulty ?? "social",
+        focus: body.focus ?? "mixed",
+        count: body.count ?? 12,
+        category: body.category ?? "scenario",
+      }),
+    }),
+
+  importGeneratedWords: (
+    profileId: string,
+    body: {
+      category?: string;
+      difficulty?: string;
+      entries: Array<{
+        thai: string;
+        english: string;
+        part_of_speech?: string;
+        kind?: string;
+        usefulness?: string;
+        notes?: string;
+      }>;
+    },
+  ) =>
+    fetchJson<WordImportResponse>(`${BASE}/words/import-generated`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        profile_id: profileId,
+        category: body.category ?? "scenario",
+        difficulty: body.difficulty ?? "social",
+        entries: body.entries,
+      }),
+    }),
+
+  generateWordLab: (
+    profileId: string,
+    wordId: string,
+    body: { task: "explanation" | "example"; model?: string },
+  ) =>
+    fetchJson<WordLabResponse>(`${BASE}/words/${encodeURIComponent(wordId)}/lab`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        profile_id: profileId,
+        task: body.task,
+        model: body.model ?? "",
+      }),
+    }),
+
+  getStory: (
+    profileId: string,
+    options?: { challenge?: string; topic?: string },
+  ) => {
+    const params = new URLSearchParams();
+    if (options?.challenge) params.set("challenge", options.challenge);
+    if (options?.topic) params.set("topic", options.topic);
+    const query = params.toString();
+    return fetchJson<StoryResponse>(withProfileId(`${BASE}/story${query ? `?${query}` : ""}`, profileId));
+  },
 
   updateWordStatus: (profileId: string, wordId: string, status: "active" | "suspended" | "archived") =>
     fetchJson<WordWithMastery>(withProfileId(`${BASE}/words/${wordId}/status`, profileId), {
@@ -96,8 +199,8 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  deleteWord: (wordId: string) =>
-    fetchJson<{ status: string }>(`${BASE}/words/${wordId}`, {
+  deleteWord: (profileId: string, wordId: string) =>
+    fetchJson<WordWithMastery>(withProfileId(`${BASE}/words/${wordId}`, profileId), {
       method: "DELETE",
     }),
 

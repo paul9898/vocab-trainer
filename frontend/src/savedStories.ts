@@ -17,14 +17,29 @@ export function getSavedStories(profileId: string): SavedStory[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((item): item is SavedStory => {
-      return Boolean(
-        item &&
-        typeof item.id === "string" &&
-        typeof item.saved_at === "number" &&
-        typeof item.title_th === "string" &&
-        typeof item.story_th === "string",
-      );
+    return parsed.flatMap((item) => {
+      if (
+        !item ||
+        typeof item.id !== "string" ||
+        typeof item.saved_at !== "number" ||
+        typeof item.title_th !== "string" ||
+        typeof item.story_th !== "string"
+      ) {
+        return [];
+      }
+      return [
+        {
+          ...item,
+          challenge: typeof item.challenge === "string" ? item.challenge : "balanced",
+          topic: typeof item.topic === "string" ? item.topic : "daily_life",
+          sentences: Array.isArray(item.sentences) ? item.sentences : [],
+          focus_words: Array.isArray(item.focus_words) ? item.focus_words : [],
+          model: typeof item.model === "string" ? item.model : "gpt-4.1-mini",
+          distribution_label: typeof item.distribution_label === "string" ? item.distribution_label : "",
+          title_en: typeof item.title_en === "string" ? item.title_en : "",
+          story_en: typeof item.story_en === "string" ? item.story_en : "",
+        } satisfies SavedStory,
+      ];
     });
   } catch {
     return [];

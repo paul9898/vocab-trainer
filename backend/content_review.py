@@ -94,6 +94,8 @@ async def review_word_material(word: dict[str, Any]) -> dict[str, Any]:
     if CLIENT is None:
         raise RuntimeError("OpenAI client unavailable for content review")
 
+    transient_errors = {"RateLimitError", "APIConnectionError", "APITimeoutError", "InternalServerError"}
+
     for attempt in range(6):
         try:
             response = await CLIENT.chat.completions.create(
@@ -118,13 +120,13 @@ async def review_word_material(word: dict[str, Any]) -> dict[str, Any]:
             parsed = _extract_json_payload(content)
             return normalize_review_payload(word, parsed)
         except Exception as exc:
+            error_name = type(exc).__name__
+            if error_name not in transient_errors:
+                raise
             if attempt == 5:
                 raise
-            error_name = type(exc).__name__
             # Back off more aggressively on transient API pressure.
             sleep_seconds = min(12, 0.6 * (2**attempt))
-            if error_name not in {"RateLimitError", "APIConnectionError", "APITimeoutError", "InternalServerError"}:
-                sleep_seconds = min(4, sleep_seconds)
             await asyncio.sleep(sleep_seconds)
 
     raise RuntimeError("Unreachable review retry loop")

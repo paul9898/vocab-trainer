@@ -65,7 +65,23 @@ function formatEtaHours(hours: number | null) {
   return `${days}d ${remainderHours}h`;
 }
 
-export function StatsPage({ profileId }: { profileId: string }) {
+function formatPercent(value: number) {
+  return `${(value * 100).toFixed(0)}%`;
+}
+
+function formatMs(ms: number) {
+  if (!ms || !Number.isFinite(ms)) return "n/a";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+export function StatsPage({
+  profileId,
+  onOpenWord,
+}: {
+  profileId: string;
+  onOpenWord?: (wordId: string) => void;
+}) {
   const [stats, setStats] = useState<StatsResponse | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
 
@@ -91,9 +107,9 @@ export function StatsPage({ profileId }: { profileId: string }) {
       <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div className="space-y-3">
           <p className="text-sm font-semibold uppercase tracking-[0.24em] text-ink/45">Stats</p>
-          <h1 className="font-display text-4xl text-ink md:text-5xl">ROI over time</h1>
+          <h1 className="font-display text-4xl text-ink md:text-5xl">Review health and progress</h1>
           <p className="max-w-2xl text-base leading-7 text-ink/70">
-            Track how much mastery you create per hour, not just how many taps you make.
+            See how much you study, how healthy the SRS queue is, and which words are still causing drag.
           </p>
         </div>
         <button
@@ -145,6 +161,123 @@ export function StatsPage({ profileId }: { profileId: string }) {
               </p>
             </div>
           </div>
+
+          <section className="glass-panel rounded-[28px] p-6 shadow-soft">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-ink/45">Review activity</p>
+                <h2 className="mt-2 font-display text-3xl text-ink">What your study actually looks like</h2>
+              </div>
+              <p className="text-sm text-ink/60">
+                Avg review time {formatMs(stats.average_review_time_ms)} · Avg session {formatStudyTime(Math.round(stats.average_session_seconds))}
+              </p>
+            </div>
+
+            <div className="mt-5 grid gap-4 md:grid-cols-4 lg:grid-cols-7">
+              <div className="rounded-[20px] bg-white/70 p-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-ink/45">Reviews today</p>
+                <p className="mt-2 text-2xl font-semibold text-ink">{stats.reviews_today}</p>
+              </div>
+              <div className="rounded-[20px] bg-white/70 p-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-ink/45">Last 7 days</p>
+                <p className="mt-2 text-2xl font-semibold text-ink">{stats.reviews_last_7_days}</p>
+              </div>
+              <div className="rounded-[20px] bg-white/70 p-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-ink/45">Correct</p>
+                <p className="mt-2 text-2xl font-semibold text-ink">{formatPercent(stats.correct_rate)}</p>
+              </div>
+              <div className="rounded-[20px] bg-white/70 p-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-ink/45">Hinted</p>
+                <p className="mt-2 text-2xl font-semibold text-ink">{formatPercent(stats.hint_rate)}</p>
+              </div>
+              <div className="rounded-[20px] bg-white/70 p-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-ink/45">Wrong</p>
+                <p className="mt-2 text-2xl font-semibold text-ink">{formatPercent(stats.wrong_rate)}</p>
+              </div>
+              <div className="rounded-[20px] bg-white/70 p-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-ink/45">Avg review</p>
+                <p className="mt-2 text-2xl font-semibold text-ink">{formatMs(stats.average_review_time_ms)}</p>
+              </div>
+              <div className="rounded-[20px] bg-white/70 p-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-ink/45">Avg session</p>
+                <p className="mt-2 text-2xl font-semibold text-ink">
+                  {formatStudyTime(Math.round(stats.average_session_seconds))}
+                </p>
+              </div>
+            </div>
+          </section>
+
+          <section className="glass-panel rounded-[28px] p-6 shadow-soft">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-ink/45">SRS health</p>
+                <h2 className="mt-2 font-display text-3xl text-ink">What needs attention next</h2>
+              </div>
+              <p className="text-sm text-ink/60">Counts reflect active study items only unless noted.</p>
+            </div>
+
+            <div className="mt-5 grid gap-4 md:grid-cols-4 lg:grid-cols-7">
+              <div className="rounded-[20px] bg-white/70 p-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-ink/45">Due now</p>
+                <p className="mt-2 text-2xl font-semibold text-ink">{stats.due_now_count}</p>
+              </div>
+              <div className="rounded-[20px] bg-white/70 p-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-ink/45">Due in 24h</p>
+                <p className="mt-2 text-2xl font-semibold text-ink">{stats.due_today_count}</p>
+              </div>
+              <div className="rounded-[20px] bg-white/70 p-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-ink/45">Overdue</p>
+                <p className="mt-2 text-2xl font-semibold text-ink">{stats.overdue_count}</p>
+              </div>
+              <div className="rounded-[20px] bg-white/70 p-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-ink/45">Fragile</p>
+                <p className="mt-2 text-2xl font-semibold text-ink">{stats.fragile_count}</p>
+              </div>
+              <div className="rounded-[20px] bg-white/70 p-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-ink/45">Mature</p>
+                <p className="mt-2 text-2xl font-semibold text-ink">{stats.mature_count}</p>
+              </div>
+              <div className="rounded-[20px] bg-white/70 p-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-ink/45">Suspended</p>
+                <p className="mt-2 text-2xl font-semibold text-ink">{stats.suspended_count}</p>
+              </div>
+              <div className="rounded-[20px] bg-white/70 p-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-ink/45">Archived</p>
+                <p className="mt-2 text-2xl font-semibold text-ink">{stats.archived_count}</p>
+              </div>
+            </div>
+          </section>
+
+          <section className="glass-panel rounded-[28px] p-6 shadow-soft">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-ink/45">Hardest words</p>
+                <h2 className="mt-2 font-display text-3xl text-ink">Where the friction still is</h2>
+              </div>
+              <p className="text-sm text-ink/60">Ranked by wrong answers first, then hint usage.</p>
+            </div>
+
+            {stats.hardest_words.length > 0 ? (
+              <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                {stats.hardest_words.map((word) => (
+                  <button
+                    key={word.word_id}
+                    type="button"
+                    onClick={() => onOpenWord?.(word.word_id)}
+                    className="rounded-[20px] bg-white/70 p-4 text-left transition hover:bg-white"
+                  >
+                    <p className="text-lg font-semibold text-ink">{word.thai}</p>
+                    <p className="mt-1 text-sm text-ink/60">{word.english}</p>
+                    <p className="mt-3 text-sm text-ink/65">{word.incorrect_count} wrong · {word.hint_count} hinted</p>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="mt-5 rounded-[22px] bg-white/70 p-5 text-sm text-ink/60">
+                No standout problem words yet. As you review more, this panel will show the most error-prone items.
+              </div>
+            )}
+          </section>
 
           <section className="glass-panel rounded-[28px] p-6 shadow-soft">
             <div className="flex items-center justify-between gap-4">

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
 from uuid import uuid4
@@ -13,12 +14,19 @@ try:
     from backend.db import DEFAULT_ACCOUNT_ID, DEFAULT_PROFILE_ID, WORDS_PATH, get_db, init_db, seed_from_json
     from backend.frequency import frequency_band_for_word
     from backend.llm_cache import (
+        clear_cached_questions,
         get_cached_explanation,
         get_cached_question,
         set_cached_explanation,
         set_cached_question,
     )
-    from backend.llm import generate_explanation, generate_question
+    from backend.llm import (
+        SCENARIO_VOCAB_MODEL,
+        generate_explanation,
+        generate_question,
+        generate_scenario_vocab,
+        generate_word_lab_content,
+    )
     from backend.mastery import compute_due_at, question_type_for_mastery, update_mastery
     from backend.models import (
         Account,
@@ -29,12 +37,21 @@ try:
         Profile,
         ProfileCreateRequest,
         QuestionResponse,
+        GeneratedWordImportRequest,
         SessionCompleteRequest,
         SessionCompleteResponse,
         SessionStartResponse,
+        ScenarioVocabRequest,
+        ScenarioVocabResponse,
+        ScenarioWordCandidate,
         StoryFocusWord,
+        StorySentence,
         StoryResponse,
         StatsResponse,
+        WordImportRequest,
+        WordImportResponse,
+        WordLabRequest,
+        WordLabResponse,
         WordStatusRequest,
         WordWithMastery,
     )
@@ -42,25 +59,52 @@ try:
         create_account,
         create_profile,
         ensure_profile,
+        export_profile_snapshot,
         get_account,
         list_accounts,
         list_profiles,
         reset_profile,
     )
     from backend.scheduler import build_session
-    from backend.story import STORY_DISTRIBUTION_LABEL, STORY_OPENAI_MODEL, generate_story, select_story_focus_words
+    from backend.story import (
+        DEFAULT_STORY_CHALLENGE,
+        DEFAULT_STORY_TOPIC,
+        STORY_OPENAI_MODEL,
+        generate_story,
+        get_cached_story,
+        get_story_distribution_label,
+        normalize_story_challenge,
+        normalize_story_topic,
+        select_story_focus_words,
+        set_cached_story,
+    )
     from backend.tts import TTSConfigurationError, TTSProviderError, synthesize_speech
-    from backend.vocab import delete_word, get_all_words, get_option_pool, get_word, update_word_status
+    from backend.vocab import (
+        delete_word,
+        get_all_words,
+        get_option_pool,
+        get_word,
+        import_generated_words,
+        import_words,
+        update_word_status,
+    )
 except ImportError:  # pragma: no cover - supports `uvicorn main:app` from /backend
     from db import DEFAULT_ACCOUNT_ID, DEFAULT_PROFILE_ID, WORDS_PATH, get_db, init_db, seed_from_json
     from frequency import frequency_band_for_word
     from llm_cache import (
+        clear_cached_questions,
         get_cached_explanation,
         get_cached_question,
         set_cached_explanation,
         set_cached_question,
     )
-    from llm import generate_explanation, generate_question
+    from llm import (
+        SCENARIO_VOCAB_MODEL,
+        generate_explanation,
+        generate_question,
+        generate_scenario_vocab,
+        generate_word_lab_content,
+    )
     from mastery import compute_due_at, question_type_for_mastery, update_mastery
     from models import (
         Account,
@@ -71,12 +115,21 @@ except ImportError:  # pragma: no cover - supports `uvicorn main:app` from /back
         Profile,
         ProfileCreateRequest,
         QuestionResponse,
+        GeneratedWordImportRequest,
         SessionCompleteRequest,
         SessionCompleteResponse,
         SessionStartResponse,
+        ScenarioVocabRequest,
+        ScenarioVocabResponse,
+        ScenarioWordCandidate,
         StoryFocusWord,
+        StorySentence,
         StoryResponse,
         StatsResponse,
+        WordImportRequest,
+        WordImportResponse,
+        WordLabRequest,
+        WordLabResponse,
         WordStatusRequest,
         WordWithMastery,
     )
@@ -84,15 +137,35 @@ except ImportError:  # pragma: no cover - supports `uvicorn main:app` from /back
         create_account,
         create_profile,
         ensure_profile,
+        export_profile_snapshot,
         get_account,
         list_accounts,
         list_profiles,
         reset_profile,
     )
     from scheduler import build_session
-    from story import STORY_DISTRIBUTION_LABEL, STORY_OPENAI_MODEL, generate_story, select_story_focus_words
+    from story import (
+        DEFAULT_STORY_CHALLENGE,
+        DEFAULT_STORY_TOPIC,
+        STORY_OPENAI_MODEL,
+        generate_story,
+        get_cached_story,
+        get_story_distribution_label,
+        normalize_story_challenge,
+        normalize_story_topic,
+        select_story_focus_words,
+        set_cached_story,
+    )
     from tts import TTSConfigurationError, TTSProviderError, synthesize_speech
-    from vocab import delete_word, get_all_words, get_option_pool, get_word, update_word_status
+    from vocab import (
+        delete_word,
+        get_all_words,
+        get_option_pool,
+        get_word,
+        import_generated_words,
+        import_words,
+        update_word_status,
+    )
 
 
 DIFFICULTY_MULTIPLIER = {
@@ -146,6 +219,12 @@ async def _resolve_account_id(db: aiosqlite.Connection, account_id: str | None) 
     return active_account_id
 
 
+def _slugify_filename_part(value: str, fallback: str) -> str:
+    normalized = "".join(ch.lower() if ch.isalnum() else "-" for ch in value.strip())
+    normalized = "-".join(part for part in normalized.split("-") if part)
+    return normalized or fallback
+
+
 async def _ensure_session(db: aiosqlite.Connection, session_id: str, profile_id: str) -> None:
     await db.execute(
         """
@@ -174,6 +253,7 @@ async def _build_question_response(
 
     cached_question = await get_cached_question(
         db,
+        profile_id=profile_id,
         word_id=word_id,
         mastery_level=int(word["mastery_level"]),
     )
@@ -188,6 +268,7 @@ async def _build_question_response(
         generated = await generate_question(word, int(word["mastery_level"]), option_pool)
         await set_cached_question(
             db,
+            profile_id=profile_id,
             word_id=word_id,
             mastery_level=int(word["mastery_level"]),
             question=generated,
@@ -269,9 +350,35 @@ async def post_profile_reset(
 ) -> dict[str, str]:
     active_profile_id = await _resolve_profile_id(db, profile_id)
     await reset_profile(db, active_profile_id)
+    await clear_cached_questions(db, profile_id=active_profile_id)
     for cache_key in [key for key in QUESTION_CACHE if key[0].startswith(f"{active_profile_id}:")]:
         QUESTION_CACHE.pop(cache_key, None)
     return {"status": "reset"}
+
+
+@app.get("/profiles/{profile_id}/export")
+async def get_profile_export(
+    profile_id: str,
+    db: aiosqlite.Connection = Depends(get_db),
+) -> Response:
+    active_profile_id = await _resolve_profile_id(db, profile_id)
+    snapshot = await export_profile_snapshot(db, active_profile_id)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    exported_at = now_ts()
+    snapshot["exported_at"] = exported_at
+    profile = snapshot.get("profile") or {}
+    account = snapshot.get("account") or {}
+    profile_name = _slugify_filename_part(str(profile.get("name", "")), "profile")
+    account_name = _slugify_filename_part(str(account.get("name", "")), "account")
+    filename = f"mastery-export-{account_name}-{profile_name}-{exported_at}.json"
+    content = json.dumps(snapshot, ensure_ascii=False, indent=2)
+    return Response(
+        content=content,
+        media_type="application/json; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.get("/tts/speak")
@@ -326,11 +433,12 @@ async def post_issue_report(
 @app.get("/session", response_model=SessionStartResponse)
 async def start_session(
     length: int = Query(default=20, ge=1, le=100),
+    all_due: bool = Query(default=False),
     profile_id: str = Query(default=DEFAULT_PROFILE_ID),
     db: aiosqlite.Connection = Depends(get_db),
 ) -> SessionStartResponse:
     active_profile_id = await _resolve_profile_id(db, profile_id)
-    word_queue = await build_session(db, length, active_profile_id)
+    word_queue = await build_session(db, length, active_profile_id, all_due=all_due)
     if not word_queue:
         raise HTTPException(status_code=404, detail="No words available")
 
@@ -482,6 +590,9 @@ async def get_stats(
     db: aiosqlite.Connection = Depends(get_db),
 ) -> StatsResponse:
     active_profile_id = await _resolve_profile_id(db, profile_id)
+    now = now_ts()
+    day_ago = now - 24 * 60 * 60
+    week_ago = now - 7 * 24 * 60 * 60
     total_words_row = await (await db.execute("SELECT COUNT(*) AS count FROM words")).fetchone()
     mastered_row = await (
         await db.execute("SELECT COUNT(*) AS count FROM mastery WHERE profile_id = ? AND level = 5", (active_profile_id,))
@@ -520,7 +631,8 @@ async def get_stats(
             SELECT
               COUNT(*) AS completed,
               COALESCE(SUM(duration_seconds), 0) AS total_study_seconds,
-              COALESCE(SUM(weighted_mastered), 0.0) AS total_weighted_mastered
+              COALESCE(SUM(weighted_mastered), 0.0) AS total_weighted_mastered,
+              COALESCE(AVG(duration_seconds), 0.0) AS average_session_seconds
             FROM sessions
             WHERE profile_id = ? AND ended_at IS NOT NULL
             """,
@@ -562,9 +674,79 @@ async def get_stats(
             (active_profile_id,),
         )
     ).fetchone()
+    review_row = await (
+        await db.execute(
+            """
+            SELECT
+              COUNT(*) AS total_reviews,
+              COALESCE(SUM(CASE WHEN timestamp >= ? THEN 1 ELSE 0 END), 0) AS reviews_today,
+              COALESCE(SUM(CASE WHEN timestamp >= ? THEN 1 ELSE 0 END), 0) AS reviews_last_7_days,
+              COALESCE(SUM(CASE WHEN correct = 1 AND used_hint = 0 THEN 1 ELSE 0 END), 0) AS correct_count,
+              COALESCE(SUM(CASE WHEN used_hint = 1 THEN 1 ELSE 0 END), 0) AS hint_count,
+              COALESCE(SUM(CASE WHEN correct = 0 THEN 1 ELSE 0 END), 0) AS wrong_count,
+              COALESCE(AVG(CASE WHEN time_taken_ms > 0 THEN time_taken_ms END), 0.0) AS average_review_time_ms
+            FROM attempts
+            WHERE profile_id = ?
+            """,
+            (day_ago, week_ago, active_profile_id),
+        )
+    ).fetchone()
+    due_row = await (
+        await db.execute(
+            """
+            SELECT
+              COALESCE(SUM(CASE WHEN mastery.due_at IS NOT NULL AND mastery.due_at <= ? THEN 1 ELSE 0 END), 0) AS due_now_count,
+              COALESCE(SUM(CASE WHEN mastery.due_at IS NOT NULL AND mastery.due_at <= ? THEN 1 ELSE 0 END), 0) AS due_today_count,
+              COALESCE(SUM(CASE WHEN mastery.due_at IS NOT NULL AND mastery.due_at < ? THEN 1 ELSE 0 END), 0) AS overdue_count
+            FROM mastery
+            JOIN words ON words.id = mastery.word_id
+            LEFT JOIN profile_word_status
+              ON profile_word_status.word_id = words.id
+             AND profile_word_status.profile_id = mastery.profile_id
+            WHERE mastery.profile_id = ?
+              AND COALESCE(profile_word_status.status, words.status) = 'active'
+            """,
+            (now, now + 24 * 60 * 60, now, active_profile_id),
+        )
+    ).fetchone()
+    flow_row = await (
+        await db.execute(
+            """
+            SELECT
+              COALESCE(SUM(CASE WHEN COALESCE(profile_word_status.status, words.status) = 'suspended' THEN 1 ELSE 0 END), 0) AS suspended_count,
+              COALESCE(SUM(CASE WHEN COALESCE(profile_word_status.status, words.status) = 'archived' THEN 1 ELSE 0 END), 0) AS archived_count
+            FROM words
+            LEFT JOIN profile_word_status
+              ON profile_word_status.word_id = words.id
+             AND profile_word_status.profile_id = ?
+            """,
+            (active_profile_id,),
+        )
+    ).fetchone()
+    hardest_rows = await (
+        await db.execute(
+            """
+            SELECT
+              words.id AS word_id,
+              words.thai AS thai,
+              words.english AS english,
+              SUM(CASE WHEN attempts.correct = 0 THEN 1 ELSE 0 END) AS incorrect_count,
+              SUM(CASE WHEN attempts.used_hint = 1 THEN 1 ELSE 0 END) AS hint_count
+            FROM attempts
+            JOIN words ON words.id = attempts.word_id
+            WHERE attempts.profile_id = ?
+            GROUP BY words.id, words.thai, words.english
+            HAVING incorrect_count > 0 OR hint_count > 0
+            ORDER BY incorrect_count DESC, hint_count DESC, words.thai ASC
+            LIMIT 8
+            """,
+            (active_profile_id,),
+        )
+    ).fetchall()
 
     total_study_seconds = int(sessions_row["total_study_seconds"]) if sessions_row else 0
     total_weighted_mastered = float(sessions_row["total_weighted_mastered"]) if sessions_row else 0.0
+    average_session_seconds = float(sessions_row["average_session_seconds"]) if sessions_row else 0.0
     lifetime_roi = (total_weighted_mastered / (total_study_seconds / 3600)) if total_study_seconds else 0.0
     session_roi = (
         float(last_session_row["weighted_mastered"]) / (int(last_session_row["duration_seconds"]) / 3600)
@@ -574,6 +756,10 @@ async def get_stats(
     remaining_weighted_mastery = (
         float(remaining_row["remaining_weighted_mastery"]) if remaining_row else 0.0
     )
+    total_reviews = int(review_row["total_reviews"]) if review_row else 0
+    correct_count = int(review_row["correct_count"]) if review_row else 0
+    hint_count = int(review_row["hint_count"]) if review_row else 0
+    wrong_count = int(review_row["wrong_count"]) if review_row else 0
     estimate_basis_roi = lifetime_roi or session_roi
     estimated_hours_to_mastery = (
         remaining_weighted_mastery / estimate_basis_roi if estimate_basis_roi > 0 else None
@@ -591,18 +777,64 @@ async def get_stats(
         frequency_distribution=frequency_distribution,
         sessions_completed=int(sessions_row["completed"]) if sessions_row else 0,
         total_study_seconds=total_study_seconds,
+        reviews_today=int(review_row["reviews_today"]) if review_row else 0,
+        reviews_last_7_days=int(review_row["reviews_last_7_days"]) if review_row else 0,
+        correct_rate=(correct_count / total_reviews) if total_reviews else 0.0,
+        hint_rate=(hint_count / total_reviews) if total_reviews else 0.0,
+        wrong_rate=(wrong_count / total_reviews) if total_reviews else 0.0,
+        average_review_time_ms=float(review_row["average_review_time_ms"]) if review_row else 0.0,
+        average_session_seconds=average_session_seconds,
+        due_now_count=int(due_row["due_now_count"]) if due_row else 0,
+        due_today_count=int(due_row["due_today_count"]) if due_row else 0,
+        overdue_count=int(due_row["overdue_count"]) if due_row else 0,
+        suspended_count=int(flow_row["suspended_count"]) if flow_row else 0,
+        archived_count=int(flow_row["archived_count"]) if flow_row else 0,
+        fragile_count=distribution.get("1", 0),
+        mature_count=distribution.get("5", 0),
+        hardest_words=[
+            {
+                "word_id": str(row["word_id"]),
+                "thai": str(row["thai"]),
+                "english": str(row["english"]),
+                "incorrect_count": int(row["incorrect_count"]),
+                "hint_count": int(row["hint_count"]),
+            }
+            for row in hardest_rows
+        ],
     )
 
 
 @app.get("/story", response_model=StoryResponse)
 async def get_story(
     profile_id: str = Query(default=DEFAULT_PROFILE_ID),
+    challenge: str = Query(default=DEFAULT_STORY_CHALLENGE),
+    topic: str = Query(default=DEFAULT_STORY_TOPIC),
     db: aiosqlite.Connection = Depends(get_db),
 ) -> StoryResponse:
     active_profile_id = await _resolve_profile_id(db, profile_id)
+    normalized_challenge = normalize_story_challenge(challenge)
+    normalized_topic = normalize_story_topic(topic)
     words = await get_all_words(db, active_profile_id)
-    focus_words = select_story_focus_words(words)
-    story = await generate_story(focus_words)
+    focus_words = select_story_focus_words(words, challenge=normalized_challenge)
+    story = get_cached_story(
+        active_profile_id,
+        focus_words,
+        challenge=normalized_challenge,
+        topic=normalized_topic,
+    )
+    if story is None:
+        story = await generate_story(
+            focus_words,
+            challenge=normalized_challenge,
+            topic=normalized_topic,
+        )
+        set_cached_story(
+            active_profile_id,
+            focus_words,
+            story,
+            challenge=normalized_challenge,
+            topic=normalized_topic,
+        )
     return StoryResponse(
         profile_id=active_profile_id,
         title_th=story["title_th"],
@@ -610,7 +842,13 @@ async def get_story(
         story_th=story["story_th"],
         story_en=story["story_en"],
         model=STORY_OPENAI_MODEL,
-        distribution_label=STORY_DISTRIBUTION_LABEL,
+        challenge=normalized_challenge,
+        topic=normalized_topic,
+        distribution_label=get_story_distribution_label(normalized_challenge),
+        sentences=[
+            StorySentence(thai=str(sentence.get("thai", "")), english=str(sentence.get("english", "")))
+            for sentence in story.get("sentences", [])
+        ],
         focus_words=[
             StoryFocusWord(
                 id=str(word.get("id", "")),
@@ -636,6 +874,106 @@ async def get_words(
     return [WordWithMastery(**row) for row in rows]
 
 
+@app.post("/words/import", response_model=WordImportResponse)
+async def post_words_import(
+    payload: WordImportRequest,
+    db: aiosqlite.Connection = Depends(get_db),
+) -> WordImportResponse:
+    active_profile_id = await _resolve_profile_id(db, payload.profile_id)
+    added_words, skipped_words = await import_words(
+        db,
+        profile_id=active_profile_id,
+        text=payload.text,
+        category=payload.category,
+        difficulty=payload.difficulty,
+    )
+    return WordImportResponse(
+        profile_id=active_profile_id,
+        added_count=len(added_words),
+        skipped_count=len(skipped_words),
+        added_words=[WordWithMastery(**word) for word in added_words],
+        skipped_words=skipped_words,
+    )
+
+
+@app.post("/words/import-generated", response_model=WordImportResponse)
+async def post_generated_words_import(
+    payload: GeneratedWordImportRequest,
+    db: aiosqlite.Connection = Depends(get_db),
+) -> WordImportResponse:
+    active_profile_id = await _resolve_profile_id(db, payload.profile_id)
+    added_words, skipped_words = await import_generated_words(
+        db,
+        profile_id=active_profile_id,
+        entries=[entry.model_dump() for entry in payload.entries],
+        category=payload.category,
+        difficulty=payload.difficulty,
+    )
+    return WordImportResponse(
+        profile_id=active_profile_id,
+        added_count=len(added_words),
+        skipped_count=len(skipped_words),
+        added_words=[WordWithMastery(**word) for word in added_words],
+        skipped_words=skipped_words,
+    )
+
+
+@app.post("/words/scenario", response_model=ScenarioVocabResponse)
+async def post_scenario_vocab(
+    payload: ScenarioVocabRequest,
+    db: aiosqlite.Connection = Depends(get_db),
+) -> ScenarioVocabResponse:
+    active_profile_id = await _resolve_profile_id(db, payload.profile_id)
+    generated = await generate_scenario_vocab(
+        scenario=payload.scenario,
+        difficulty=payload.difficulty,
+        focus=payload.focus,
+        count=payload.count,
+    )
+    return ScenarioVocabResponse(
+        profile_id=active_profile_id,
+        scenario=payload.scenario,
+        difficulty=payload.difficulty,
+        focus=payload.focus,
+        category=payload.category,
+        model=str(generated.get("model", SCENARIO_VOCAB_MODEL)),
+        candidates=[
+            ScenarioWordCandidate(
+                thai=str(item.get("thai", "")),
+                english=str(item.get("english", "")),
+                part_of_speech=str(item.get("part_of_speech", "word")),
+                kind=str(item.get("kind", "word")),
+                usefulness=str(item.get("usefulness", "useful")),
+                notes=str(item.get("notes", "")),
+            )
+            for item in generated.get("candidates", [])
+        ],
+    )
+
+
+@app.post("/words/{word_id}/lab", response_model=WordLabResponse)
+async def post_word_lab(
+    word_id: str,
+    payload: WordLabRequest,
+    db: aiosqlite.Connection = Depends(get_db),
+) -> WordLabResponse:
+    active_profile_id = await _resolve_profile_id(db, payload.profile_id)
+    word = await get_word(db, word_id, active_profile_id)
+    if not word:
+        raise HTTPException(status_code=404, detail="Word not found")
+
+    result = await generate_word_lab_content(word, task=payload.task, model=payload.model or None)
+    return WordLabResponse(
+        word_id=word_id,
+        task=str(result.get("task", payload.task)),
+        model=str(result.get("model", payload.model or "")),
+        explanation=str(result.get("explanation", "")),
+        example_th=str(result.get("example_th", "")),
+        example_en=str(result.get("example_en", "")),
+        notes=str(result.get("notes", "")),
+    )
+
+
 @app.patch("/words/{word_id}/status", response_model=WordWithMastery)
 async def patch_word_status(
     word_id: str,
@@ -651,25 +989,29 @@ async def patch_word_status(
     if updated is None:
         raise HTTPException(status_code=404, detail="Word not found")
 
-    for cache_key in [key for key in QUESTION_CACHE if key[1] == word_id]:
+    await clear_cached_questions(db, profile_id=active_profile_id)
+    for cache_key in [key for key in QUESTION_CACHE if key[0].startswith(f"{active_profile_id}:")]:
         QUESTION_CACHE.pop(cache_key, None)
 
     return WordWithMastery(**updated)
 
 
-@app.delete("/words/{word_id}")
+@app.delete("/words/{word_id}", response_model=WordWithMastery)
 async def remove_word(
     word_id: str,
+    profile_id: str = Query(default=DEFAULT_PROFILE_ID),
     db: aiosqlite.Connection = Depends(get_db),
-) -> dict[str, str]:
-    deleted = await delete_word(db, word_id=word_id)
-    if not deleted:
+) -> WordWithMastery:
+    active_profile_id = await _resolve_profile_id(db, profile_id)
+    deleted = await delete_word(db, word_id=word_id, profile_id=active_profile_id)
+    if deleted is None:
         raise HTTPException(status_code=404, detail="Word not found")
 
-    for cache_key in [key for key in QUESTION_CACHE if key[1] == word_id]:
+    await clear_cached_questions(db, profile_id=active_profile_id)
+    for cache_key in [key for key in QUESTION_CACHE if key[0].startswith(f"{active_profile_id}:")]:
         QUESTION_CACHE.pop(cache_key, None)
 
-    return {"status": "deleted"}
+    return WordWithMastery(**deleted)
 
 
 @app.post("/session/complete", response_model=SessionCompleteResponse)

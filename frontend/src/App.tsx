@@ -1,28 +1,37 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
+import { AddWordsPage } from "./pages/AddWordsPage";
 import { DrillPage } from "./pages/DrillPage";
 import { GraphPage } from "./pages/GraphPage";
+import { LibraryPage } from "./pages/LibraryPage";
 import { StatsPage } from "./pages/StatsPage";
 import { StoryPage } from "./pages/StoryPage";
+import { WordsPage } from "./pages/WordsPage";
 import type { Account, Profile } from "./types";
 
-type Page = "drill" | "story" | "graph" | "stats";
+type Page = "drill" | "add" | "story" | "words" | "library" | "graph" | "stats";
 
 const pages: { id: Page; label: string }[] = [
   { id: "drill", label: "Drill" },
+  { id: "add", label: "Add" },
   { id: "story", label: "Story" },
+  { id: "words", label: "Words" },
+  { id: "library", label: "Library" },
   { id: "graph", label: "Graph" },
   { id: "stats", label: "Stats" },
 ];
 
 export default function App() {
   const [page, setPage] = useState<Page>("drill");
+  const [wordNavigationTarget, setWordNavigationTarget] = useState<string | null>(null);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [currentAccountId, setCurrentAccountId] = useState<string>("");
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [currentProfileId, setCurrentProfileId] = useState<string>("");
   const [profileError, setProfileError] = useState("");
   const [profileRefreshToken, setProfileRefreshToken] = useState(0);
+  const [bootstrapping, setBootstrapping] = useState(true);
+  const [exportingProfile, setExportingProfile] = useState(false);
 
   useEffect(() => {
     void loadAccounts();
@@ -30,6 +39,7 @@ export default function App() {
 
   async function loadAccounts() {
     try {
+      setBootstrapping(true);
       const nextAccounts = await api.getAccounts();
       setAccounts(nextAccounts);
       setProfileError("");
@@ -46,6 +56,8 @@ export default function App() {
       }
     } catch (error) {
       setProfileError(error instanceof Error ? error.message : "Unable to load accounts.");
+    } finally {
+      setBootstrapping(false);
     }
   }
 
@@ -124,6 +136,32 @@ export default function App() {
     }
   }
 
+  async function handleExportProfile() {
+    const activeProfile = profiles.find((profile) => profile.id === currentProfileId);
+    if (!activeProfile) return;
+
+    try {
+      setExportingProfile(true);
+      const blob = await api.exportProfile(activeProfile.id);
+      const timestamp = new Date().toISOString().slice(0, 10);
+      const safeName =
+        activeProfile.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "profile";
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `mastery-export-${safeName}-${timestamp}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      setProfileError("");
+    } catch (error) {
+      setProfileError(error instanceof Error ? error.message : "Unable to export profile.");
+    } finally {
+      setExportingProfile(false);
+    }
+  }
+
   function handleProfileChange(profileId: string) {
     setCurrentProfileId(profileId);
     if (currentAccountId) {
@@ -136,6 +174,11 @@ export default function App() {
     window.localStorage.setItem("mastery-account-id", accountId);
     setCurrentProfileId("");
     await loadProfiles(accountId);
+  }
+
+  function handleOpenWord(wordId: string) {
+    setWordNavigationTarget(wordId);
+    setPage("words");
   }
 
   return (
@@ -194,6 +237,14 @@ export default function App() {
               </button>
               <button
                 type="button"
+                onClick={() => void handleExportProfile()}
+                disabled={!currentProfileId || exportingProfile}
+                className="rounded-full border border-black/10 bg-white/70 px-4 py-2 text-sm font-semibold text-ink hover:bg-white disabled:opacity-50"
+              >
+                {exportingProfile ? "Exporting..." : "Export profile"}
+              </button>
+              <button
+                type="button"
                 onClick={() => void handleResetProfile()}
                 disabled={!currentProfileId}
                 className="rounded-full border border-black/10 bg-white/70 px-4 py-2 text-sm font-semibold text-ink hover:bg-white disabled:opacity-50"
@@ -222,10 +273,41 @@ export default function App() {
         </header>
 
         <main className="flex-1 py-6 md:py-8">
-          {page === "drill" && currentProfileId ? <DrillPage key={`${currentProfileId}:${profileRefreshToken}`} profileId={currentProfileId} /> : null}
-          {page === "story" && currentProfileId ? <StoryPage key={`${currentProfileId}:${profileRefreshToken}`} profileId={currentProfileId} /> : null}
-          {page === "graph" && currentProfileId ? <GraphPage key={`${currentProfileId}:${profileRefreshToken}`} profileId={currentProfileId} /> : null}
-          {page === "stats" && currentProfileId ? <StatsPage key={`${currentProfileId}:${profileRefreshToken}`} profileId={currentProfileId} /> : null}
+          {bootstrapping ? (
+            <div className="glass-panel rounded-[28px] p-8 shadow-soft">
+              <p className="text-lg font-semibold text-ink">Loading your workspace...</p>
+              <p className="mt-2 text-sm text-ink/65">Pulling account, profile, and session data.</p>
+            </div>
+          ) : !currentProfileId ? (
+            <div className="glass-panel rounded-[28px] p-8 shadow-soft">
+              <p className="text-lg font-semibold text-ink">No profile is active.</p>
+              <p className="mt-2 text-sm text-ink/65">
+                Pick a profile above, or create a new one to start using the app.
+              </p>
+            </div>
+          ) : (
+            <>
+              {page === "drill" ? <DrillPage key={`${currentProfileId}:${profileRefreshToken}`} profileId={currentProfileId} /> : null}
+              {page === "add" ? <AddWordsPage key={`${currentProfileId}:${profileRefreshToken}`} profileId={currentProfileId} /> : null}
+              {page === "story" ? <StoryPage key={`${currentProfileId}:${profileRefreshToken}`} profileId={currentProfileId} /> : null}
+              {page === "words" ? (
+                <WordsPage
+                  key={`${currentProfileId}:${profileRefreshToken}`}
+                  profileId={currentProfileId}
+                  initialWordId={wordNavigationTarget}
+                />
+              ) : null}
+              {page === "library" ? <LibraryPage key={`${currentProfileId}:${profileRefreshToken}`} profileId={currentProfileId} /> : null}
+              {page === "graph" ? <GraphPage key={`${currentProfileId}:${profileRefreshToken}`} profileId={currentProfileId} /> : null}
+              {page === "stats" ? (
+                <StatsPage
+                  key={`${currentProfileId}:${profileRefreshToken}`}
+                  profileId={currentProfileId}
+                  onOpenWord={handleOpenWord}
+                />
+              ) : null}
+            </>
+          )}
         </main>
       </div>
     </div>

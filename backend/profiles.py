@@ -134,3 +134,155 @@ async def reset_profile(db: aiosqlite.Connection, profile_id: str) -> None:
     await db.execute("DELETE FROM profile_word_status WHERE profile_id = ?", (profile_id,))
     await db.execute("DELETE FROM issue_reports WHERE profile_id = ?", (profile_id,))
     await db.commit()
+
+
+async def export_profile_snapshot(db: aiosqlite.Connection, profile_id: str) -> dict[str, Any] | None:
+    profile = await get_profile(db, profile_id)
+    if profile is None:
+        return None
+
+    account = await get_account(db, str(profile.get("account_id", "")))
+
+    words_rows = await (
+        await db.execute(
+            """
+            SELECT
+              words.id,
+              words.thai,
+              words.romanisation,
+              words.tones,
+              words.english,
+              words.english_alt,
+              words.category,
+              words.difficulty,
+              COALESCE(profile_word_status.status, words.status) AS status,
+              words.example_th,
+              words.example_en,
+              COALESCE(mastery.level, 0) AS mastery_level,
+              mastery.last_seen,
+              mastery.due_at
+            FROM words
+            LEFT JOIN profile_word_status
+              ON profile_word_status.word_id = words.id
+             AND profile_word_status.profile_id = ?
+            LEFT JOIN mastery
+              ON mastery.word_id = words.id
+             AND mastery.profile_id = ?
+            ORDER BY words.category, words.thai
+            """,
+            (profile_id, profile_id),
+        )
+    ).fetchall()
+
+    mastery_rows = await (
+        await db.execute(
+            """
+            SELECT profile_id, word_id, level, last_seen, due_at
+            FROM mastery
+            WHERE profile_id = ?
+            ORDER BY word_id
+            """,
+            (profile_id,),
+        )
+    ).fetchall()
+
+    status_rows = await (
+        await db.execute(
+            """
+            SELECT profile_id, word_id, status
+            FROM profile_word_status
+            WHERE profile_id = ?
+            ORDER BY word_id
+            """,
+            (profile_id,),
+        )
+    ).fetchall()
+
+    attempt_rows = await (
+        await db.execute(
+            """
+            SELECT
+              id,
+              profile_id,
+              word_id,
+              timestamp,
+              correct,
+              used_hint,
+              mastery_before,
+              mastery_after,
+              question_type,
+              time_taken_ms,
+              session_id
+            FROM attempts
+            WHERE profile_id = ?
+            ORDER BY timestamp ASC, id ASC
+            """,
+            (profile_id,),
+        )
+    ).fetchall()
+
+    session_rows = await (
+        await db.execute(
+            """
+            SELECT
+              id,
+              profile_id,
+              started_at,
+              ended_at,
+              words_attempted,
+              words_mastered,
+              weighted_mastered,
+              duration_seconds
+            FROM sessions
+            WHERE profile_id = ?
+            ORDER BY started_at ASC, id ASC
+            """,
+            (profile_id,),
+        )
+    ).fetchall()
+
+    issue_rows = await (
+        await db.execute(
+            """
+            SELECT
+              id,
+              profile_id,
+              word_id,
+              issue_type,
+              note,
+              question_type,
+              created_at
+            FROM issue_reports
+            WHERE profile_id = ?
+            ORDER BY created_at ASC, id ASC
+            """,
+            (profile_id,),
+        )
+    ).fetchall()
+
+    words = [dict(row) for row in words_rows]
+    mastery = [dict(row) for row in mastery_rows]
+    statuses = [dict(row) for row in status_rows]
+    attempts = [dict(row) for row in attempt_rows]
+    sessions = [dict(row) for row in session_rows]
+    issue_reports = [dict(row) for row in issue_rows]
+
+    return {
+        "schema_version": 1,
+        "account": account,
+        "profile": profile,
+        "summary": {
+            "total_words": len(words),
+            "mastery_rows": len(mastery),
+            "status_overrides": len(statuses),
+            "attempts": len(attempts),
+            "sessions": len(sessions),
+            "issue_reports": len(issue_reports),
+        },
+        "words": words,
+        "mastery": mastery,
+        "profile_word_status": statuses,
+        "attempts": attempts,
+        "sessions": sessions,
+        "issue_reports": issue_reports,
+    }

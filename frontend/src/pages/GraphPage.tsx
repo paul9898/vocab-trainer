@@ -185,18 +185,20 @@ export function GraphPage({ profileId }: { profileId: string }) {
   }
 
   async function deleteSelectedWord(word: WordWithMastery) {
-    const confirmed = window.confirm(`Delete '${word.thai}' permanently? This cannot be undone.`);
+    const confirmed = window.confirm(
+      `Remove '${word.thai}' from this profile's study flow? It will be archived for this learner only.`,
+    );
     if (!confirmed) return;
 
     try {
-      await api.deleteWord(word.id);
-      setWords((current) => current.filter((entry) => entry.id !== word.id));
-      setSelectedWord(null);
+      const updated = await api.deleteWord(profileId, word.id);
+      setWords((current) => current.map((entry) => (entry.id === updated.id ? updated : entry)));
+      setSelectedWord(updated);
       if (drillQuestion?.word_id === word.id) {
         closeMiniDrill();
       }
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Unable to delete word.");
+      setErrorMessage(error instanceof Error ? error.message : "Unable to archive word.");
     }
   }
 
@@ -426,7 +428,7 @@ export function GraphPage({ profileId }: { profileId: string }) {
                 onClick={() => void deleteSelectedWord(selectedWord)}
                 className="rounded-full border border-clay/20 bg-clay/10 px-5 py-3 text-sm font-semibold text-clay"
               >
-                Delete permanently
+                Remove from profile
               </button>
             </div>
           </div>

@@ -28,9 +28,11 @@ When noting pronunciation, use the Royal Thai General System of Transcription (R
 Always return valid JSON only - no markdown, no preamble, no explanation outside the JSON.
 """.strip()
 
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 CLIENT = AsyncOpenAI(api_key=OPENAI_API_KEY) if AsyncOpenAI and OPENAI_API_KEY else None
+WORD_LAB_MODEL = os.getenv("WORD_LAB_MODEL", OPENAI_MODEL)
+SCENARIO_VOCAB_MODEL = os.getenv("SCENARIO_VOCAB_MODEL", "gpt-4.1-mini")
 
 
 def _question_type_for_mastery(mastery_level: int) -> str:
@@ -265,6 +267,296 @@ def _normalize_explanation(explanation: str) -> str:
         text = text[:217].rstrip() + "..."
 
     return text
+
+
+def _normalize_word_lab_task(task: str) -> str:
+    normalized = task.strip().lower().replace("-", "_")
+    if normalized in {"sentence", "example_sentence", "fresh_sentence"}:
+        return "example"
+    if normalized == "explanation":
+        return normalized
+    raise ValueError("Unsupported word lab task")
+
+
+def _normalize_model_override(model: str | None) -> str:
+    candidate = (model or "").strip()
+    return candidate or WORD_LAB_MODEL
+
+
+def _clean_sentence_text(value: str) -> str:
+    return " ".join(value.split()).strip()
+
+
+async def generate_word_lab_content(
+    word: dict[str, Any],
+    *,
+    task: str,
+    model: str | None = None,
+) -> dict[str, str]:
+    normalized_task = _normalize_word_lab_task(task)
+    model_name = _normalize_model_override(model)
+
+    if normalized_task == "explanation":
+        fallback = {
+            "task": "explanation",
+            "model": model_name,
+            "explanation": (
+                f"'{word['thai']}' means '{word['english']}'. "
+                f"Use it in contexts like '{word.get('example_en', word['english'])}'."
+            ).strip(),
+            "example_th": "",
+            "example_en": "",
+            "notes": "",
+        }
+    else:
+        fallback = {
+            "task": "example",
+            "model": model_name,
+            "explanation": "",
+            "example_th": _clean_sentence_text(str(word.get("example_th", ""))),
+            "example_en": _clean_sentence_text(str(word.get("example_en", ""))),
+            "notes": "Fallback example shown.",
+        }
+
+    if CLIENT is None:
+        return fallback
+
+    payload = {
+        "word": {
+            "thai": word["thai"],
+            "romanisation": word.get("romanisation", ""),
+            "english": word["english"],
+            "english_alt": word.get("english_alt", ""),
+            "example_th": word.get("example_th", ""),
+            "example_en": word.get("example_en", ""),
+            "category": word.get("category", ""),
+            "difficulty": word.get("difficulty", ""),
+            "mastery_level": word.get("mastery_level", 0),
+        },
+    }
+
+    try:
+        if normalized_task == "explanation":
+            response = await CLIENT.chat.completions.create(
+                model=model_name,
+                temperature=0.35,
+                max_tokens=180,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {
+                        "role": "user",
+                        "content": (
+                            "Return JSON with exactly this shape: "
+                            '{"explanation":"...","notes":"..."}\n'
+                            "Write a concise learner-facing explanation in English. "
+                            "Clarify nuance, register, or a likely confusion. "
+                            "Keep explanation to 1-2 short sentences and notes to one short line.\n"
+                            f"{json.dumps(payload, ensure_ascii=False)}"
+                        ),
+                    },
+                ],
+            )
+            content = response.choices[0].message.content or ""
+            parsed = _extract_json_payload(content)
+            explanation = _normalize_explanation(_clean_explanation_text(str(parsed.get("explanation", ""))))
+            notes = _clean_sentence_text(str(parsed.get("notes", "")))
+            if not explanation:
+                return fallback
+            return {
+                "task": "explanation",
+                "model": model_name,
+                "explanation": explanation,
+                "example_th": "",
+                "example_en": "",
+                "notes": notes,
+            }
+
+        response = await CLIENT.chat.completions.create(
+            model=model_name,
+            temperature=0.55,
+            max_tokens=220,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": (
+                        "Return JSON with exactly this shape: "
+                        '{"example_th":"...","example_en":"...","notes":"..."}\n'
+                        "Write one fresh Thai example sentence that uses the target word naturally. "
+                        "Keep it concise, modern, and learner-friendly. "
+                        "Then give a natural English translation. "
+                        "In notes, mention one short usage clue or register note.\n"
+                        f"{json.dumps(payload, ensure_ascii=False)}"
+                    ),
+                },
+            ],
+        )
+        content = response.choices[0].message.content or ""
+        parsed = _extract_json_payload(content)
+        example_th = _clean_sentence_text(str(parsed.get("example_th", "")))
+        example_en = _clean_sentence_text(str(parsed.get("example_en", "")))
+        notes = _clean_sentence_text(str(parsed.get("notes", "")))
+        if not example_th or not example_en:
+            return fallback
+        return {
+            "task": "example",
+            "model": model_name,
+            "explanation": "",
+            "example_th": example_th,
+            "example_en": example_en,
+            "notes": notes,
+        }
+    except Exception:
+        return fallback
+
+
+def _normalize_candidate_text(value: str) -> str:
+    return " ".join(value.split()).strip()
+
+
+def _normalize_part_of_speech(value: str) -> str:
+    normalized = _normalize_candidate_text(value).lower()
+    if not normalized:
+        return "word"
+
+    alias_map = {
+        "v": "verb",
+        "verb": "verb",
+        "action": "verb",
+        "n": "noun",
+        "noun": "noun",
+        "thing": "noun",
+        "adj": "adjective",
+        "adjective": "adjective",
+        "descriptive": "adjective",
+        "adv": "adverb",
+        "adverb": "adverb",
+        "classifier": "classifier",
+        "measure word": "classifier",
+        "particle": "particle",
+        "question particle": "particle",
+        "pronoun": "pronoun",
+        "preposition": "preposition",
+        "conjunction": "conjunction",
+        "phrase": "phrase",
+        "verb phrase": "verb phrase",
+        "noun phrase": "noun phrase",
+        "verb / noun": "verb / noun",
+        "noun / verb": "noun / verb",
+    }
+    return alias_map.get(normalized, normalized[:40])
+
+
+def _normalize_scenario_candidates(
+    items: list[dict[str, Any]] | None,
+    *,
+    count: int,
+) -> list[dict[str, str]]:
+    normalized: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in items or []:
+        thai = _normalize_candidate_text(str(item.get("thai", "")))
+        english = _normalize_candidate_text(str(item.get("english", "")))
+        if not thai or thai in seen:
+            continue
+        seen.add(thai)
+        normalized.append(
+            {
+                "thai": thai,
+                "english": english or "Pending gloss",
+                "part_of_speech": _normalize_part_of_speech(str(item.get("part_of_speech", ""))),
+                "kind": _normalize_candidate_text(str(item.get("kind", ""))) or "word",
+                "usefulness": _normalize_candidate_text(str(item.get("usefulness", ""))) or "useful",
+                "notes": _normalize_candidate_text(str(item.get("notes", ""))),
+            }
+        )
+        if len(normalized) >= count:
+            break
+    return normalized
+
+
+def _scenario_fallback_candidates(scenario: str, count: int, focus: str) -> list[dict[str, str]]:
+    base = [
+        {"thai": "ขอ", "english": "ask for / request", "part_of_speech": "verb", "kind": "word", "usefulness": "must know", "notes": "Very common for polite requests."},
+        {"thai": "ช่วย", "english": "help / please help", "part_of_speech": "verb", "kind": "word", "usefulness": "must know", "notes": "Useful for getting assistance."},
+        {"thai": "ได้ไหม", "english": "can / could?", "part_of_speech": "phrase", "kind": "phrase", "usefulness": "must know", "notes": "Common polite question ending."},
+        {"thai": "ต้องการ", "english": "need / want", "part_of_speech": "verb", "kind": "word", "usefulness": "useful", "notes": "Useful for stating needs clearly."},
+        {"thai": "ราคา", "english": "price", "part_of_speech": "noun", "kind": "word", "usefulness": "useful", "notes": "Appears in many real-world situations."},
+        {"thai": "ตอนนี้", "english": "right now", "part_of_speech": "phrase", "kind": "phrase", "usefulness": "useful", "notes": "Helpful for immediate context."},
+        {"thai": "รอ", "english": "wait", "part_of_speech": "verb", "kind": "word", "usefulness": "useful", "notes": "Common in service and travel contexts."},
+        {"thai": "ปัญหา", "english": "problem", "part_of_speech": "noun", "kind": "word", "usefulness": "useful", "notes": "Useful when something goes wrong."},
+        {"thai": "เรียบร้อย", "english": "done / complete", "part_of_speech": "adjective", "kind": "word", "usefulness": "nice to have", "notes": "Common status word."},
+        {"thai": "เข้าใจ", "english": "understand", "part_of_speech": "verb", "kind": "word", "usefulness": "must know", "notes": "Important for checking communication."},
+    ]
+    if focus == "phrases":
+        base.insert(0, {"thai": "ขอ...หน่อย", "english": "please ... for me", "part_of_speech": "phrase", "kind": "phrase", "usefulness": "must know", "notes": "Very common polite request pattern."})
+        base.insert(1, {"thai": "ไม่แน่ใจ", "english": "not sure", "part_of_speech": "phrase", "kind": "phrase", "usefulness": "useful", "notes": "Useful when clarifying."})
+    return _normalize_scenario_candidates(base, count=count)
+
+
+async def generate_scenario_vocab(
+    *,
+    scenario: str,
+    difficulty: str,
+    focus: str,
+    count: int,
+) -> dict[str, Any]:
+    fallback_candidates = _scenario_fallback_candidates(scenario, count, focus)
+    fallback = {
+        "model": SCENARIO_VOCAB_MODEL,
+        "candidates": fallback_candidates,
+    }
+
+    if CLIENT is None:
+        return fallback
+
+    payload = {
+        "scenario": scenario,
+        "difficulty": difficulty,
+        "focus": focus,
+        "count": count,
+        "instructions": [
+            "Generate practical Thai vocabulary for this situation.",
+            "Prefer modern, natural Thai for an English-speaking adult learner in Bangkok.",
+            "Mix words and short phrases if helpful.",
+            "Keep English glosses concise and useful.",
+            "Include part_of_speech and use it to disambiguate English glosses that could be noun or verb.",
+            "If the English meaning is ambiguous, choose the most relevant part of speech for this Thai item.",
+            "Return the most teachable items first.",
+        ],
+    }
+
+    try:
+        response = await CLIENT.chat.completions.create(
+            model=SCENARIO_VOCAB_MODEL,
+            temperature=0.5,
+            max_tokens=900,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": (
+                        "Return JSON with exactly this shape: "
+                        '{"candidates":[{"thai":"...","english":"...","part_of_speech":"verb","kind":"word","usefulness":"must know","notes":"..."}]}\n'
+                        "Candidates should be useful, non-duplicative, and suitable for the requested difficulty.\n"
+                        "Use part_of_speech values like verb, noun, adjective, adverb, phrase, classifier, particle, or verb / noun only when genuinely ambiguous.\n"
+                        "Do not leave part_of_speech blank.\n"
+                        f"{json.dumps(payload, ensure_ascii=False)}"
+                    ),
+                },
+            ],
+        )
+        content = response.choices[0].message.content or ""
+        parsed = _extract_json_payload(content)
+        candidates = _normalize_scenario_candidates(parsed.get("candidates"), count=count)
+        if not candidates:
+            return fallback
+        return {
+            "model": SCENARIO_VOCAB_MODEL,
+            "candidates": candidates,
+        }
+    except Exception:
+        return fallback
 
 
 def _build_fallback_question(

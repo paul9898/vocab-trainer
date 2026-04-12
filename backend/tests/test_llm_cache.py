@@ -19,6 +19,7 @@ class LLMCacheTests(unittest.IsolatedAsyncioTestCase):
         await self.db.executescript(
             """
             CREATE TABLE cached_questions (
+              profile_id     TEXT NOT NULL,
               word_id       TEXT NOT NULL,
               mastery_level INTEGER NOT NULL,
               question_type TEXT NOT NULL,
@@ -26,7 +27,7 @@ class LLMCacheTests(unittest.IsolatedAsyncioTestCase):
               options_json  TEXT NOT NULL,
               correct_value TEXT NOT NULL,
               updated_at    INTEGER NOT NULL,
-              PRIMARY KEY (word_id, mastery_level)
+              PRIMARY KEY (profile_id, word_id, mastery_level)
             );
 
             CREATE TABLE cached_explanations (
@@ -45,6 +46,7 @@ class LLMCacheTests(unittest.IsolatedAsyncioTestCase):
     async def test_cached_question_round_trips(self) -> None:
         await set_cached_question(
             self.db,
+            profile_id="p1",
             word_id="w1",
             mastery_level=2,
             question={
@@ -54,13 +56,30 @@ class LLMCacheTests(unittest.IsolatedAsyncioTestCase):
                 "correct_index": 0,
             },
         )
-        cached = await get_cached_question(self.db, word_id="w1", mastery_level=2)
+        cached = await get_cached_question(self.db, profile_id="p1", word_id="w1", mastery_level=2)
         self.assertIsNotNone(cached)
         assert cached is not None
         self.assertEqual(cached["question_type"], "production")
         self.assertEqual(cached["prompt_text"], "eat")
         self.assertEqual(sorted(cached["options"]), sorted(["กิน", "นอน", "ดื่ม", "เดิน"]))
         self.assertEqual(cached["options"][cached["correct_index"]], "กิน")
+
+    async def test_cached_question_is_isolated_per_profile(self) -> None:
+        await set_cached_question(
+            self.db,
+            profile_id="p1",
+            word_id="w1",
+            mastery_level=2,
+            question={
+                "question_type": "production",
+                "prompt_text": "eat",
+                "options": ["กิน", "นอน", "ดื่ม", "เดิน"],
+                "correct_index": 0,
+            },
+        )
+
+        cached = await get_cached_question(self.db, profile_id="p2", word_id="w1", mastery_level=2)
+        self.assertIsNone(cached)
 
     async def test_cached_explanation_round_trips_by_outcome(self) -> None:
         await set_cached_explanation(self.db, word_id="w2", correct=True, explanation="Nice work.")

@@ -53,6 +53,65 @@ class WordWithMastery(WordEntry):
     mastery_level: int = 0
 
 
+class WordImportRequest(BaseModel):
+    profile_id: str
+    text: str = Field(min_length=1, max_length=20_000)
+    category: str = Field(default="general", max_length=40)
+    difficulty: str = Field(default="social", max_length=40)
+
+
+class WordImportResponse(BaseModel):
+    profile_id: str
+    added_count: int
+    skipped_count: int
+    added_words: list[WordWithMastery] = Field(default_factory=list)
+    skipped_words: list[str] = Field(default_factory=list)
+
+
+class ScenarioWordCandidate(BaseModel):
+    thai: str
+    english: str
+    part_of_speech: str = "word"
+    kind: str = "word"
+    usefulness: str = "useful"
+    notes: str = ""
+
+
+class ScenarioVocabRequest(BaseModel):
+    profile_id: str
+    scenario: str = Field(min_length=1, max_length=500)
+    difficulty: str = Field(default="social", max_length=40)
+    focus: str = Field(default="mixed", max_length=40)
+    count: int = Field(default=12, ge=4, le=24)
+    category: str = Field(default="scenario", max_length=40)
+
+
+class ScenarioVocabResponse(BaseModel):
+    profile_id: str
+    scenario: str
+    difficulty: str
+    focus: str
+    category: str
+    model: str
+    candidates: list[ScenarioWordCandidate] = Field(default_factory=list)
+
+
+class GeneratedWordImportItem(BaseModel):
+    thai: str = Field(min_length=1, max_length=120)
+    english: str = Field(default="Pending gloss", max_length=120)
+    part_of_speech: str = Field(default="word", max_length=40)
+    kind: str = Field(default="word", max_length=40)
+    usefulness: str = Field(default="useful", max_length=40)
+    notes: str = Field(default="", max_length=200)
+
+
+class GeneratedWordImportRequest(BaseModel):
+    profile_id: str
+    category: str = Field(default="scenario", max_length=40)
+    difficulty: str = Field(default="social", max_length=40)
+    entries: list[GeneratedWordImportItem] = Field(default_factory=list)
+
+
 class QuestionResponse(BaseModel):
     profile_id: str
     session_id: str
@@ -129,6 +188,21 @@ class StatsResponse(BaseModel):
     frequency_distribution: dict[str, int]
     sessions_completed: int
     total_study_seconds: int
+    reviews_today: int = 0
+    reviews_last_7_days: int = 0
+    correct_rate: float = 0.0
+    hint_rate: float = 0.0
+    wrong_rate: float = 0.0
+    average_review_time_ms: float = 0.0
+    average_session_seconds: float = 0.0
+    due_now_count: int = 0
+    due_today_count: int = 0
+    overdue_count: int = 0
+    suspended_count: int = 0
+    archived_count: int = 0
+    fragile_count: int = 0
+    mature_count: int = 0
+    hardest_words: list[dict[str, str | int]] = Field(default_factory=list)
 
 
 class StoryFocusWord(BaseModel):
@@ -141,6 +215,11 @@ class StoryFocusWord(BaseModel):
     category: str = "general"
 
 
+class StorySentence(BaseModel):
+    thai: str
+    english: str
+
+
 class StoryResponse(BaseModel):
     profile_id: str
     title_th: str
@@ -148,5 +227,24 @@ class StoryResponse(BaseModel):
     story_th: str
     story_en: str
     model: str
+    challenge: str
+    topic: str
     distribution_label: str
+    sentences: list[StorySentence] = Field(default_factory=list)
     focus_words: list[StoryFocusWord] = Field(default_factory=list)
+
+
+class WordLabRequest(BaseModel):
+    profile_id: str
+    task: str = Field(min_length=1, max_length=40)
+    model: str = Field(default="", max_length=80)
+
+
+class WordLabResponse(BaseModel):
+    word_id: str
+    task: str
+    model: str
+    explanation: str = ""
+    example_th: str = ""
+    example_en: str = ""
+    notes: str = ""

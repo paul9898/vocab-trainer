@@ -55,6 +55,7 @@ async def build_session(
     db: aiosqlite.Connection,
     session_length: int = 20,
     profile_id: str = "default",
+    all_due: bool = False,
 ) -> list[str]:
     session_length = max(1, min(session_length, 100))
     now_ts = int(time.time())
@@ -93,6 +94,16 @@ async def build_session(
     for level in range(6):
         due_grouped[level] = _order_bucket(due_grouped[level], level)
         later_grouped[level] = _order_bucket(later_grouped[level], level)
+
+    if all_due:
+        selected = [
+            str(row["id"])
+            for level in range(6)
+            for row in due_grouped[level]
+            if row["due_at"] is not None and int(row["due_at"]) <= now_ts
+        ]
+        random.shuffle(selected)
+        return selected
 
     quotas = _build_quotas(session_length)
     selected: list[str] = []
