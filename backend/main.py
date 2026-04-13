@@ -35,6 +35,8 @@ try:
         AttemptResponse,
         IssueReportRequest,
         Profile,
+        ProfileImportRequest,
+        ProfileImportResponse,
         ProfileCreateRequest,
         QuestionResponse,
         GeneratedWordImportRequest,
@@ -61,6 +63,7 @@ try:
         ensure_profile,
         export_profile_snapshot,
         get_account,
+        import_profile_snapshot,
         list_accounts,
         list_profiles,
         reset_profile,
@@ -113,6 +116,8 @@ except ImportError:  # pragma: no cover - supports `uvicorn main:app` from /back
         AttemptResponse,
         IssueReportRequest,
         Profile,
+        ProfileImportRequest,
+        ProfileImportResponse,
         ProfileCreateRequest,
         QuestionResponse,
         GeneratedWordImportRequest,
@@ -139,6 +144,7 @@ except ImportError:  # pragma: no cover - supports `uvicorn main:app` from /back
         ensure_profile,
         export_profile_snapshot,
         get_account,
+        import_profile_snapshot,
         list_accounts,
         list_profiles,
         reset_profile,
@@ -379,6 +385,25 @@ async def get_profile_export(
         media_type="application/json; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@app.post("/profiles/{profile_id}/import", response_model=ProfileImportResponse)
+async def post_profile_import(
+    profile_id: str,
+    payload: ProfileImportRequest,
+    db: aiosqlite.Connection = Depends(get_db),
+) -> ProfileImportResponse:
+    active_profile_id = await _resolve_profile_id(db, profile_id)
+    try:
+        restored = await import_profile_snapshot(db, target_profile_id=active_profile_id, snapshot=payload.snapshot)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    await clear_cached_questions(db, profile_id=active_profile_id)
+    for cache_key in [key for key in QUESTION_CACHE if key[0].startswith(f"{active_profile_id}:")]:
+        QUESTION_CACHE.pop(cache_key, None)
+
+    return ProfileImportResponse(profile_id=active_profile_id, **restored)
 
 
 @app.get("/tts/speak")

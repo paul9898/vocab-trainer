@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ChangeEvent } from "react";
 import { api } from "./api";
 import { AddWordsPage } from "./pages/AddWordsPage";
 import { DrillPage } from "./pages/DrillPage";
@@ -32,6 +32,7 @@ export default function App() {
   const [profileRefreshToken, setProfileRefreshToken] = useState(0);
   const [bootstrapping, setBootstrapping] = useState(true);
   const [exportingProfile, setExportingProfile] = useState(false);
+  const [importingProfile, setImportingProfile] = useState(false);
 
   useEffect(() => {
     void loadAccounts();
@@ -162,6 +163,32 @@ export default function App() {
     }
   }
 
+  async function handleImportProfile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || !currentProfileId) return;
+
+    const activeProfile = profiles.find((profile) => profile.id === currentProfileId);
+    const confirmed = window.confirm(
+      `Import this backup into '${activeProfile?.name ?? "current profile"}'? This will replace its current progress.`,
+    );
+    if (!confirmed) return;
+
+    try {
+      setImportingProfile(true);
+      const text = await file.text();
+      const snapshot = JSON.parse(text);
+      await api.importProfile(currentProfileId, snapshot);
+      setProfileError("");
+      setPage("drill");
+      setProfileRefreshToken((current) => current + 1);
+    } catch (error) {
+      setProfileError(error instanceof Error ? error.message : "Unable to import profile backup.");
+    } finally {
+      setImportingProfile(false);
+    }
+  }
+
   function handleProfileChange(profileId: string) {
     setCurrentProfileId(profileId);
     if (currentAccountId) {
@@ -243,6 +270,20 @@ export default function App() {
               >
                 {exportingProfile ? "Exporting..." : "Export profile"}
               </button>
+              <label
+                className={`rounded-full border border-black/10 bg-white/70 px-4 py-2 text-sm font-semibold text-ink hover:bg-white ${
+                  !currentProfileId || importingProfile ? "opacity-50" : ""
+                }`}
+              >
+                <input
+                  type="file"
+                  accept="application/json,.json"
+                  onChange={(event) => void handleImportProfile(event)}
+                  disabled={!currentProfileId || importingProfile}
+                  className="hidden"
+                />
+                {importingProfile ? "Importing..." : "Import backup"}
+              </label>
               <button
                 type="button"
                 onClick={() => void handleResetProfile()}

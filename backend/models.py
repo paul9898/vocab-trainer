@@ -15,6 +15,20 @@ class ProfileCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=40)
 
 
+class ProfileImportRequest(BaseModel):
+    snapshot: dict
+
+
+class ProfileImportResponse(BaseModel):
+    profile_id: str
+    restored_words: int = 0
+    restored_mastery: int = 0
+    restored_statuses: int = 0
+    restored_attempts: int = 0
+    restored_sessions: int = 0
+    restored_issue_reports: int = 0
+
+
 class Account(BaseModel):
     id: str
     name: str

@@ -68,6 +68,13 @@ export const api = {
   exportProfile: (profileId: string) =>
     fetchBlob(`${BASE}/profiles/${encodeURIComponent(profileId)}/export`),
 
+  importProfile: (profileId: string, snapshot: unknown) =>
+    fetchJson<{ profile_id: string }>(`${BASE}/profiles/${encodeURIComponent(profileId)}/import`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ snapshot }),
+    }),
+
   resetProfile: (profileId: string) =>
     fetchJson<{ status: string }>(`${BASE}/profiles/${encodeURIComponent(profileId)}/reset`, {
       method: "POST",

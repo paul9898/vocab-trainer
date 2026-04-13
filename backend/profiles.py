@@ -286,3 +286,203 @@ async def export_profile_snapshot(db: aiosqlite.Connection, profile_id: str) -> 
         "sessions": sessions,
         "issue_reports": issue_reports,
     }
+
+
+async def import_profile_snapshot(
+    db: aiosqlite.Connection,
+    *,
+    target_profile_id: str,
+    snapshot: dict[str, Any],
+) -> dict[str, int]:
+    if not isinstance(snapshot, dict):
+        raise ValueError("Snapshot payload must be a JSON object.")
+
+    words = snapshot.get("words") or []
+    mastery_rows = snapshot.get("mastery") or []
+    status_rows = snapshot.get("profile_word_status") or []
+    attempt_rows = snapshot.get("attempts") or []
+    session_rows = snapshot.get("sessions") or []
+    issue_rows = snapshot.get("issue_reports") or []
+
+    if not all(isinstance(collection, list) for collection in [words, mastery_rows, status_rows, attempt_rows, session_rows, issue_rows]):
+        raise ValueError("Snapshot collections are malformed.")
+
+    await db.execute("BEGIN")
+    try:
+        restored_words = 0
+        for item in words:
+            if not isinstance(item, dict):
+                continue
+            word_id = str(item.get("id", "")).strip()
+            thai = str(item.get("thai", "")).strip()
+            english = str(item.get("english", "")).strip()
+            if not word_id or not thai or not english:
+                continue
+
+            await db.execute(
+                """
+                INSERT INTO words (
+                  id, thai, romanisation, tones, english, english_alt,
+                  category, difficulty, status, example_th, example_en
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                  thai = excluded.thai,
+                  romanisation = excluded.romanisation,
+                  tones = excluded.tones,
+                  english = excluded.english,
+                  english_alt = excluded.english_alt,
+                  category = excluded.category,
+                  difficulty = excluded.difficulty,
+                  status = excluded.status,
+                  example_th = excluded.example_th,
+                  example_en = excluded.example_en
+                """,
+                (
+                    word_id,
+                    thai,
+                    str(item.get("romanisation", "")).strip(),
+                    str(item.get("tones", "")).strip(),
+                    english,
+                    str(item.get("english_alt", "")).strip(),
+                    str(item.get("category", "")).strip() or "general",
+                    str(item.get("difficulty", "")).strip() or "social",
+                    str(item.get("status", "")).strip() or "active",
+                    str(item.get("example_th", "")).strip(),
+                    str(item.get("example_en", "")).strip(),
+                ),
+            )
+            restored_words += 1
+
+        await db.execute("DELETE FROM mastery WHERE profile_id = ?", (target_profile_id,))
+        await db.execute("DELETE FROM attempts WHERE profile_id = ?", (target_profile_id,))
+        await db.execute("DELETE FROM sessions WHERE profile_id = ?", (target_profile_id,))
+        await db.execute("DELETE FROM profile_word_status WHERE profile_id = ?", (target_profile_id,))
+        await db.execute("DELETE FROM issue_reports WHERE profile_id = ?", (target_profile_id,))
+
+        restored_mastery = 0
+        for item in mastery_rows:
+            if not isinstance(item, dict):
+                continue
+            word_id = str(item.get("word_id", "")).strip()
+            if not word_id:
+                continue
+            await db.execute(
+                "INSERT INTO mastery (profile_id, word_id, level, last_seen, due_at) VALUES (?, ?, ?, ?, ?)",
+                (target_profile_id, word_id, int(item.get("level", 0) or 0), item.get("last_seen"), item.get("due_at")),
+            )
+            restored_mastery += 1
+
+        restored_statuses = 0
+        for item in status_rows:
+            if not isinstance(item, dict):
+                continue
+            word_id = str(item.get("word_id", "")).strip()
+            status = str(item.get("status", "")).strip()
+            if not word_id or not status:
+                continue
+            await db.execute(
+                "INSERT INTO profile_word_status (profile_id, word_id, status) VALUES (?, ?, ?)",
+                (target_profile_id, word_id, status),
+            )
+            restored_statuses += 1
+
+        session_id_map: dict[str, str] = {}
+        restored_sessions = 0
+        for item in session_rows:
+            if not isinstance(item, dict):
+                continue
+            original_session_id = str(item.get("id", "")).strip()
+            if not original_session_id:
+                continue
+            session_id = original_session_id
+            existing = await (
+                await db.execute("SELECT id FROM sessions WHERE id = ?", (original_session_id,))
+            ).fetchone()
+            if existing is not None:
+                session_id = f"{target_profile_id}-{uuid4()}"
+            session_id_map[original_session_id] = session_id
+            await db.execute(
+                """
+                INSERT INTO sessions (
+                  id, profile_id, started_at, ended_at, words_attempted,
+                  words_mastered, weighted_mastered, duration_seconds
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    session_id,
+                    target_profile_id,
+                    item.get("started_at"),
+                    item.get("ended_at"),
+                    item.get("words_attempted", 0),
+                    item.get("words_mastered", 0),
+                    item.get("weighted_mastered", 0.0),
+                    item.get("duration_seconds", 0),
+                ),
+            )
+            restored_sessions += 1
+
+        restored_attempts = 0
+        for item in attempt_rows:
+            if not isinstance(item, dict):
+                continue
+            original_session_id = str(item.get("session_id", "")).strip()
+            await db.execute(
+                """
+                INSERT INTO attempts (
+                  profile_id, word_id, timestamp, correct, used_hint, mastery_before,
+                  mastery_after, question_type, time_taken_ms, session_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    target_profile_id,
+                    str(item.get("word_id", "")).strip() or None,
+                    item.get("timestamp"),
+                    item.get("correct"),
+                    item.get("used_hint"),
+                    item.get("mastery_before"),
+                    item.get("mastery_after"),
+                    str(item.get("question_type", "")).strip(),
+                    item.get("time_taken_ms"),
+                    session_id_map.get(original_session_id, original_session_id) or None,
+                ),
+            )
+            restored_attempts += 1
+
+        restored_issue_reports = 0
+        for item in issue_rows:
+            if not isinstance(item, dict):
+                continue
+            word_id = str(item.get("word_id", "")).strip()
+            issue_type = str(item.get("issue_type", "")).strip()
+            if not word_id or not issue_type:
+                continue
+            await db.execute(
+                """
+                INSERT INTO issue_reports (
+                  profile_id, word_id, issue_type, note, question_type, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    target_profile_id,
+                    word_id,
+                    issue_type,
+                    str(item.get("note", "")).strip(),
+                    str(item.get("question_type", "")).strip(),
+                    item.get("created_at"),
+                ),
+            )
+            restored_issue_reports += 1
+
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+
+    return {
+        "restored_words": restored_words,
+        "restored_mastery": restored_mastery,
+        "restored_statuses": restored_statuses,
+        "restored_attempts": restored_attempts,
+        "restored_sessions": restored_sessions,
+        "restored_issue_reports": restored_issue_reports,
+    }
