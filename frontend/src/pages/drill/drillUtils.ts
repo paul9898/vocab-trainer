@@ -1,6 +1,7 @@
 import type { QuestionResponse, QuestionType } from "../../types";
 
 export type DrillPhase = "loading" | "question" | "submitting" | "answered" | "complete" | "error";
+export type DrillMode = "drill" | "test";
 export type SessionLengthOption = 10 | 20 | 30 | "all_due";
 
 export const SESSION_LENGTH_OPTIONS: SessionLengthOption[] = [10, 20, 30, "all_due"];
@@ -56,4 +57,11 @@ export function hiddenTargetMessage(questionType: QuestionType): string {
     case "recognition":
       return "";
   }
+}
+
+export function buildGapFillPrompt(exampleThai: string, thaiWord: string): string {
+  if (exampleThai && thaiWord && exampleThai.includes(thaiWord)) {
+    return exampleThai.replace(thaiWord, "______");
+  }
+  return exampleThai || "______";
 }

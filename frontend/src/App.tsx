@@ -21,6 +21,8 @@ const pages: { id: Page; label: string }[] = [
   { id: "stats", label: "Stats" },
 ];
 
+const LAST_EXPORT_KEY = "mastery-last-profile-export-at";
+
 export default function App() {
   const [page, setPage] = useState<Page>("drill");
   const [wordNavigationTarget, setWordNavigationTarget] = useState<string | null>(null);
@@ -33,9 +35,11 @@ export default function App() {
   const [bootstrapping, setBootstrapping] = useState(true);
   const [exportingProfile, setExportingProfile] = useState(false);
   const [importingProfile, setImportingProfile] = useState(false);
+  const [lastExportAt, setLastExportAt] = useState("");
 
   useEffect(() => {
     void loadAccounts();
+    setLastExportAt(window.localStorage.getItem(LAST_EXPORT_KEY) ?? "");
   }, []);
 
   async function loadAccounts() {
@@ -155,6 +159,9 @@ export default function App() {
       link.click();
       link.remove();
       window.URL.revokeObjectURL(url);
+      const exportedAt = new Date().toISOString();
+      window.localStorage.setItem(LAST_EXPORT_KEY, exportedAt);
+      setLastExportAt(exportedAt);
       setProfileError("");
     } catch (error) {
       setProfileError(error instanceof Error ? error.message : "Unable to export profile.");
@@ -309,6 +316,10 @@ export default function App() {
                 ))}
               </nav>
             </div>
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-ink/50">
+            <span>Data safety: export after good study sessions, and keep a whole-DB backup weekly.</span>
+            {lastExportAt ? <span>Last profile export: {new Date(lastExportAt).toLocaleString()}</span> : null}
           </div>
           {profileError ? <p className="mt-3 text-sm text-clay">{profileError}</p> : null}
         </header>
