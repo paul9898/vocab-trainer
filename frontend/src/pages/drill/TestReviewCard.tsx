@@ -8,6 +8,9 @@ export function TestReviewCard({
   correctCount,
   phase,
   audioStatus,
+  title = "Test review",
+  helperText = "Think of the Thai answer first, then reveal and self-mark. This mode does not affect SRS scheduling.",
+  showMarking = true,
   onReplaySentence,
   onRevealAnswer,
   onMarkRight,
@@ -19,6 +22,9 @@ export function TestReviewCard({
   correctCount: number;
   phase: "question" | "answered";
   audioStatus: string;
+  title?: string;
+  helperText?: string;
+  showMarking?: boolean;
   onReplaySentence: () => void;
   onRevealAnswer: () => void;
   onMarkRight: () => void;
@@ -46,14 +52,12 @@ export function TestReviewCard({
       <section className="glass-panel rounded-[32px] p-6 shadow-soft md:p-8">
         <div className="space-y-5">
           <div className="space-y-3">
-            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-ink/50">Test review</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-ink/50">{title}</p>
             <h2 className="font-display text-3xl leading-tight text-ink whitespace-pre-line md:text-4xl">
               {item.prompt_th}
             </h2>
             <p className="text-sm text-ink/60">English cue: {item.english}</p>
-            <p className="text-xs text-ink/45">
-              Think of the Thai answer first, then reveal and self-mark. This mode does not affect SRS scheduling.
-            </p>
+            <p className="text-xs text-ink/45">{helperText}</p>
           </div>
 
           {phase === "answered" ? (
@@ -83,7 +87,7 @@ export function TestReviewCard({
               >
                 Reveal answer
               </button>
-            ) : (
+            ) : showMarking ? (
               <>
                 <button
                   type="button"
@@ -100,7 +104,7 @@ export function TestReviewCard({
                   Mark right
                 </button>
               </>
-            )}
+            ) : null}
           </div>
           {audioStatus ? <p className="text-xs text-ink/45">Audio: {audioStatus}</p> : null}
         </div>

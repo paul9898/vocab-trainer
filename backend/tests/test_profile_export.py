@@ -53,6 +53,7 @@ class ProfileExportTests(unittest.IsolatedAsyncioTestCase):
               level INTEGER DEFAULT 0,
               last_seen INTEGER,
               due_at INTEGER,
+              failure_streak INTEGER DEFAULT 0,
               PRIMARY KEY (profile_id, word_id)
             );
 
@@ -101,7 +102,7 @@ class ProfileExportTests(unittest.IsolatedAsyncioTestCase):
             """
         )
         await self.db.execute(
-            "INSERT INTO mastery (profile_id, word_id, level, last_seen, due_at) VALUES ('p1', 'w1', 2, 100, 200)"
+            "INSERT INTO mastery (profile_id, word_id, level, last_seen, due_at, failure_streak) VALUES ('p1', 'w1', 2, 100, 200, 1)"
         )
         await self.db.execute(
             "INSERT INTO profile_word_status (profile_id, word_id, status) VALUES ('p1', 'w1', 'active')"
@@ -145,6 +146,7 @@ class ProfileExportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(exported["summary"]["mastery_rows"], 1)
         self.assertEqual(exported["words"][0]["thai"], "กิน")
         self.assertEqual(exported["words"][0]["mastery_level"], 2)
+        self.assertEqual(exported["mastery"][0]["failure_streak"], 1)
         self.assertEqual(exported["attempts"][0]["question_type"], "production")
         self.assertEqual(exported["sessions"][0]["id"], "s1")
 

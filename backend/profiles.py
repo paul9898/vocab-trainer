@@ -177,7 +177,7 @@ async def export_profile_snapshot(db: aiosqlite.Connection, profile_id: str) -> 
     mastery_rows = await (
         await db.execute(
             """
-            SELECT profile_id, word_id, level, last_seen, due_at
+            SELECT profile_id, word_id, level, last_seen, due_at, failure_streak
             FROM mastery
             WHERE profile_id = ?
             ORDER BY word_id
@@ -367,8 +367,15 @@ async def import_profile_snapshot(
             if not word_id:
                 continue
             await db.execute(
-                "INSERT INTO mastery (profile_id, word_id, level, last_seen, due_at) VALUES (?, ?, ?, ?, ?)",
-                (target_profile_id, word_id, int(item.get("level", 0) or 0), item.get("last_seen"), item.get("due_at")),
+                "INSERT INTO mastery (profile_id, word_id, level, last_seen, due_at, failure_streak) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    target_profile_id,
+                    word_id,
+                    int(item.get("level", 0) or 0),
+                    item.get("last_seen"),
+                    item.get("due_at"),
+                    int(item.get("failure_streak", 0) or 0),
+                ),
             )
             restored_mastery += 1
 

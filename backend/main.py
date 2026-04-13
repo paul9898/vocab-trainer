@@ -27,7 +27,7 @@ try:
         generate_scenario_vocab,
         generate_word_lab_content,
     )
-    from backend.mastery import compute_due_at, question_type_for_mastery, update_mastery
+    from backend.mastery import compute_due_at, question_type_for_mastery, resolve_mastery_attempt
     from backend.models import (
         Account,
         AccountCreateRequest,
@@ -108,7 +108,7 @@ except ImportError:  # pragma: no cover - supports `uvicorn main:app` from /back
         generate_scenario_vocab,
         generate_word_lab_content,
     )
-    from mastery import compute_due_at, question_type_for_mastery, update_mastery
+    from mastery import compute_due_at, question_type_for_mastery, resolve_mastery_attempt
     from models import (
         Account,
         AccountCreateRequest,
@@ -527,13 +527,19 @@ async def record_attempt(
         raise HTTPException(status_code=404, detail="Word not found")
 
     mastery_before = int(word["mastery_level"])
+    mastery_failure_streak = int(word.get("failure_streak", 0) or 0)
     correct_index = question.correct_index if question is not None else payload.correct_index
     if correct_index is None:
         raise HTTPException(status_code=400, detail="Missing correct index for attempt validation")
 
     correct = payload.chosen_index == correct_index
     question_type = question.question_type if question is not None else question_type_for_mastery(mastery_before)
-    mastery_after = update_mastery(mastery_before, correct=correct, used_hint=payload.used_hint)
+    mastery_after, failure_streak_after = resolve_mastery_attempt(
+        mastery_before,
+        correct=correct,
+        used_hint=payload.used_hint,
+        failure_streak=mastery_failure_streak,
+    )
     delta = mastery_after - mastery_before
     timestamp = now_ts()
     due_at = compute_due_at(
@@ -547,15 +553,16 @@ async def record_attempt(
 
     await db.execute(
         """
-        INSERT INTO mastery (profile_id, word_id, level, last_seen, due_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO mastery (profile_id, word_id, level, last_seen, due_at, failure_streak)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(profile_id, word_id)
         DO UPDATE SET
           level = excluded.level,
           last_seen = excluded.last_seen,
-          due_at = excluded.due_at
+          due_at = excluded.due_at,
+          failure_streak = excluded.failure_streak
         """,
-        (active_profile_id, payload.word_id, mastery_after, timestamp, due_at),
+        (active_profile_id, payload.word_id, mastery_after, timestamp, due_at, failure_streak_after),
     )
     await db.execute(
         """

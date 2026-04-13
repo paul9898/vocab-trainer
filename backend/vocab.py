@@ -74,7 +74,8 @@ async def get_word(
           words.example_th,
           words.example_en,
           COALESCE(mastery.level, 0) AS mastery_level,
-          mastery.due_at
+          mastery.due_at,
+          COALESCE(mastery.failure_streak, 0) AS failure_streak
         FROM words
         LEFT JOIN profile_word_status
           ON profile_word_status.word_id = words.id
@@ -105,7 +106,8 @@ async def get_all_words(db: aiosqlite.Connection, profile_id: str) -> list[dict[
           words.example_th,
           words.example_en,
           COALESCE(mastery.level, 0) AS mastery_level,
-          mastery.due_at
+          mastery.due_at,
+          COALESCE(mastery.failure_streak, 0) AS failure_streak
         FROM words
         LEFT JOIN profile_word_status
           ON profile_word_status.word_id = words.id

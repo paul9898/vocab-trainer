@@ -35,9 +35,9 @@ export function describeStage(questionType: QuestionType): string {
     case "production":
       return "Production";
     case "contextual":
-      return "Contextual gap-fill";
+      return "Active recall";
     case "audit":
-      return "Sentence audit";
+      return "Active recall";
   }
 }
 
@@ -51,9 +51,9 @@ export function hiddenTargetMessage(questionType: QuestionType): string {
     case "production":
       return "English prompt only until you answer.";
     case "contextual":
-      return "Use the sentence context before revealing the target.";
+      return "Think of the Thai word from the sentence and English cue before revealing it.";
     case "audit":
-      return "Sentence-only audit until you answer.";
+      return "Think of the Thai word from the sentence and English cue before revealing it.";
     case "recognition":
       return "";
   }

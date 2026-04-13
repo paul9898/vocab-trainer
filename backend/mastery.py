@@ -1,5 +1,6 @@
 MASTERY_MIN = 0
 MASTERY_MAX = 5
+LATE_STAGE_STRIKE_THRESHOLD = 2
 
 LATENCY_MIN_MS = 250
 LATENCY_IGNORE_ABOVE_MS = 45_000
@@ -47,16 +48,42 @@ def question_type_for_mastery(mastery_level: int) -> str:
     if mastery_level <= 3:
         return "production"
     if mastery_level == 4:
+        # Level 4 still resolves to the legacy "contextual" type in backend data/caches,
+        # but the live drill UI now renders it as an active-recall review flow.
+        # Keeping the contextual type here preserves the old fallback path if we ever want it.
         return "contextual"
+    # Level 5 still resolves to the legacy "audit" type in backend data/caches,
+    # but the live drill UI now renders it as an active-recall review flow.
+    # Keeping the audit type here preserves the old fallback path if we ever want it.
     return "audit"
 
 
-def update_mastery(current: int, correct: bool, used_hint: bool) -> int:
+def resolve_mastery_attempt(
+    current: int,
+    *,
+    correct: bool,
+    used_hint: bool,
+    failure_streak: int = 0,
+) -> tuple[int, int]:
     if used_hint:
-        return current
+        return current, 0
     if correct:
-        return min(current + 1, MASTERY_MAX)
-    return max(current - 1, MASTERY_MIN)
+        return min(current + 1, MASTERY_MAX), 0
+
+    next_failure_streak = max(0, failure_streak) + 1
+    if current >= 4 and next_failure_streak < LATE_STAGE_STRIKE_THRESHOLD:
+        return current, next_failure_streak
+    return max(current - 1, MASTERY_MIN), 0
+
+
+def update_mastery(current: int, correct: bool, used_hint: bool, failure_streak: int = 0) -> int:
+    mastery_after, _ = resolve_mastery_attempt(
+        current,
+        correct=correct,
+        used_hint=used_hint,
+        failure_streak=failure_streak,
+    )
+    return mastery_after
 
 
 def normalize_latency_ms(time_taken_ms: int | None) -> int | None:

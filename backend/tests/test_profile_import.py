@@ -49,6 +49,7 @@ class ProfileImportTests(unittest.IsolatedAsyncioTestCase):
               level INTEGER DEFAULT 0,
               last_seen INTEGER,
               due_at INTEGER,
+              failure_streak INTEGER DEFAULT 0,
               PRIMARY KEY (profile_id, word_id)
             );
             CREATE TABLE attempts (
@@ -95,7 +96,7 @@ class ProfileImportTests(unittest.IsolatedAsyncioTestCase):
             """
         )
         await self.db.execute(
-            "INSERT INTO mastery (profile_id, word_id, level, last_seen, due_at) VALUES ('source', 'w1', 4, 100, 200)"
+            "INSERT INTO mastery (profile_id, word_id, level, last_seen, due_at, failure_streak) VALUES ('source', 'w1', 4, 100, 200, 1)"
         )
         await self.db.execute(
             "INSERT INTO profile_word_status (profile_id, word_id, status) VALUES ('source', 'w1', 'suspended')"
@@ -133,9 +134,10 @@ class ProfileImportTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(restored["restored_mastery"], 1)
         target_mastery = await (await self.db.execute(
-            "SELECT level FROM mastery WHERE profile_id = 'target' AND word_id = 'w1'"
+            "SELECT level, failure_streak FROM mastery WHERE profile_id = 'target' AND word_id = 'w1'"
         )).fetchone()
         self.assertEqual(target_mastery["level"], 4)
+        self.assertEqual(target_mastery["failure_streak"], 1)
 
         target_attempt = await (await self.db.execute(
             "SELECT profile_id, session_id FROM attempts WHERE profile_id = 'target'"

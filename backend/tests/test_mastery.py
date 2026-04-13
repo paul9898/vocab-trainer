@@ -5,6 +5,7 @@ from backend.mastery import (
     compute_due_at,
     normalize_latency_ms,
     question_type_for_mastery,
+    resolve_mastery_attempt,
     update_mastery,
 )
 
@@ -15,6 +16,27 @@ class UpdateMasteryTests(unittest.TestCase):
 
     def test_wrong_answer_decrements(self) -> None:
         self.assertEqual(update_mastery(2, correct=False, used_hint=False), 1)
+
+    def test_level_four_first_failure_holds_level(self) -> None:
+        self.assertEqual(update_mastery(4, correct=False, used_hint=False), 4)
+
+    def test_level_five_first_failure_holds_level(self) -> None:
+        self.assertEqual(update_mastery(5, correct=False, used_hint=False), 5)
+
+    def test_late_stage_second_failure_demotes(self) -> None:
+        self.assertEqual(update_mastery(5, correct=False, used_hint=False, failure_streak=1), 4)
+
+    def test_late_stage_failure_streak_resets_on_correct(self) -> None:
+        self.assertEqual(
+            resolve_mastery_attempt(4, correct=True, used_hint=False, failure_streak=1),
+            (5, 0),
+        )
+
+    def test_late_stage_failure_streak_increments_on_first_failure(self) -> None:
+        self.assertEqual(
+            resolve_mastery_attempt(4, correct=False, used_hint=False, failure_streak=0),
+            (4, 1),
+        )
 
     def test_hint_freezes_mastery(self) -> None:
         self.assertEqual(update_mastery(4, correct=True, used_hint=True), 4)

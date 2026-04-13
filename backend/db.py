@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS mastery (
   level      INTEGER DEFAULT 0,
   last_seen  INTEGER,
   due_at     INTEGER,
+  failure_streak INTEGER DEFAULT 0,
   PRIMARY KEY (profile_id, word_id),
   FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE,
   FOREIGN KEY (word_id) REFERENCES words(id)
@@ -241,6 +242,7 @@ async def _migrate_mastery_table(db: aiosqlite.Connection) -> None:
               level      INTEGER DEFAULT 0,
               last_seen  INTEGER,
               due_at     INTEGER,
+              failure_streak INTEGER DEFAULT 0,
               PRIMARY KEY (profile_id, word_id),
               FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE,
               FOREIGN KEY (word_id) REFERENCES words(id)
@@ -250,16 +252,16 @@ async def _migrate_mastery_table(db: aiosqlite.Connection) -> None:
         if "profile_id" in columns:
             await db.execute(
                 """
-                INSERT INTO mastery (profile_id, word_id, level, last_seen, due_at)
-                SELECT profile_id, word_id, level, last_seen, due_at
+                INSERT INTO mastery (profile_id, word_id, level, last_seen, due_at, failure_streak)
+                SELECT profile_id, word_id, level, last_seen, due_at, COALESCE(failure_streak, 0)
                 FROM mastery_legacy
                 """,
             )
         else:
             await db.execute(
                 """
-                INSERT INTO mastery (profile_id, word_id, level, last_seen, due_at)
-                SELECT ?, word_id, level, last_seen, NULL
+                INSERT INTO mastery (profile_id, word_id, level, last_seen, due_at, failure_streak)
+                SELECT ?, word_id, level, last_seen, NULL, 0
                 FROM mastery_legacy
                 """,
                 (DEFAULT_PROFILE_ID,),
@@ -272,6 +274,13 @@ async def _migrate_mastery_table(db: aiosqlite.Connection) -> None:
             """
             ALTER TABLE mastery
             ADD COLUMN due_at INTEGER
+            """
+        )
+    if "failure_streak" not in columns:
+        await db.execute(
+            """
+            ALTER TABLE mastery
+            ADD COLUMN failure_streak INTEGER DEFAULT 0
             """
         )
 

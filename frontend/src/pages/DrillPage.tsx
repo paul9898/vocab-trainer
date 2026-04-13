@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { FeedbackBar } from "../components/FeedbackBar";
 import { getStarredWordIds, toggleStarredWord } from "../starred";
 import { preloadSpeech, speakSentence, speakWord, stopSpeaking, subscribeTTSStatus } from "../tts";
 import { DrillActiveSession } from "./drill/DrillActiveSession";
@@ -23,6 +24,7 @@ export function DrillPage({ profileId }: { profileId: string }) {
   const [tick, setTick] = useState(Date.now());
   const [audioStatus, setAudioStatus] = useState("");
   const [starredWordIds, setStarredWordIds] = useState<string[]>([]);
+  const [embeddedTestReveal, setEmbeddedTestReveal] = useState(false);
 
   const {
     phase,
@@ -65,7 +67,13 @@ export function DrillPage({ profileId }: { profileId: string }) {
   useEffect(() => {
     stopSpeaking();
     if (mode === "drill" && currentQuestion) {
-      preloadSpeech(currentQuestion.thai, "word");
+      const usesActiveRecallPrompt =
+        currentQuestion.question_type === "contextual" || currentQuestion.question_type === "audit";
+      preloadSpeech(
+        usesActiveRecallPrompt ? currentQuestion.example_th : currentQuestion.thai,
+        usesActiveRecallPrompt ? "sentence" : "word",
+      );
+      setEmbeddedTestReveal(false);
       requestAnimationFrame(() => {
         hotkeyAnchorRef.current?.focus({ preventScroll: true });
       });
@@ -136,6 +144,20 @@ export function DrillPage({ profileId }: { profileId: string }) {
     );
   }
 
+  function handleEmbeddedTestMark(correct: boolean) {
+    if (
+      !currentQuestion ||
+      !["contextual", "audit"].includes(currentQuestion.question_type) ||
+      phase !== "question"
+    ) {
+      return;
+    }
+    const chosenIndex = correct
+      ? currentQuestion.correct_index
+      : currentQuestion.options.findIndex((_, index) => index !== currentQuestion.correct_index);
+    void handleSelect(chosenIndex >= 0 ? chosenIndex : 0);
+  }
+
   const currentROI =
     mode === "drill" && phase === "complete" && summary
       ? summary.session_roi
@@ -189,7 +211,7 @@ export function DrillPage({ profileId }: { profileId: string }) {
       {mode === "drill" && phase === "loading" && !currentQuestion ? <DrillLoadingPanel /> : null}
 
       {mode === "drill" && (phase === "loading" || phase === "question" || phase === "submitting" || phase === "answered") &&
-      currentQuestion ? (
+      currentQuestion && !["contextual", "audit"].includes(currentQuestion.question_type) ? (
         <DrillActiveSession
           phase={phase}
           currentQuestion={currentQuestion}
@@ -220,6 +242,52 @@ export function DrillPage({ profileId }: { profileId: string }) {
           }}
           onSelect={(index) => void handleSelect(index)}
         />
+      ) : null}
+
+      {mode === "drill" &&
+      currentQuestion &&
+      ["contextual", "audit"].includes(currentQuestion.question_type) &&
+      (phase === "question" || phase === "submitting" || phase === "answered") ? (
+        <div className="space-y-6">
+          <TestReviewCard
+            item={{
+              id: currentQuestion.word_id,
+              thai: currentQuestion.thai,
+              english: currentQuestion.english,
+              romanisation: currentQuestion.romanisation,
+              example_th: currentQuestion.example_th,
+              example_en: currentQuestion.example_en,
+              mastery_level: currentQuestion.mastery_level,
+              prompt_th: currentQuestion.prompt_text,
+            }}
+            answeredCount={answeredCount}
+            totalCount={answeredCount + queue.length + 1}
+            correctCount={masteredCount}
+            phase={phase === "answered" ? "answered" : embeddedTestReveal ? "answered" : "question"}
+            audioStatus={audioStatus}
+            title="Active recall review"
+            helperText="Think of the Thai answer first, then reveal and self-mark. This version does affect your SRS scheduling."
+            showMarking={phase !== "answered"}
+            onReplaySentence={() => speakSentence(currentQuestion.example_th)}
+            onRevealAnswer={() => setEmbeddedTestReveal(true)}
+            onMarkRight={() => handleEmbeddedTestMark(true)}
+            onMarkWrong={() => handleEmbeddedTestMark(false)}
+          />
+          {attemptResult ? (
+            <FeedbackBar
+              correct={attemptResult.correct}
+              explanation={attemptResult.explanation}
+              exampleThai={currentQuestion.example_th}
+              exampleEnglish={currentQuestion.example_en}
+              onReplaySentence={() => speakSentence(currentQuestion.example_th)}
+              onToggleStar={handleToggleStar}
+              isStarred={currentWordIsStarred}
+              onFlag={() => void handleFlagIssue()}
+              actionLabel={queue.length === 0 ? "Finish session" : "Next word"}
+              onAction={() => void handleNext()}
+            />
+          ) : null}
+        </div>
       ) : null}
 
       {mode === "drill" && phase === "complete" && summary ? (
