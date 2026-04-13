@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import type { ScenarioVocabResponse, WordImportResponse } from "../types";
 
@@ -45,8 +45,37 @@ export function AddWordsPage({ profileId }: { profileId: string }) {
   const [scenarioLoading, setScenarioLoading] = useState(false);
   const [scenarioResult, setScenarioResult] = useState<ScenarioVocabResponse | null>(null);
   const [selectedScenarioTerms, setSelectedScenarioTerms] = useState<string[]>([]);
+  const [existingTerms, setExistingTerms] = useState<Set<string>>(new Set());
 
   const previewTerms = useMemo(() => normalizePreview(text), [text]);
+  const previewRows = useMemo(
+    () =>
+      previewTerms.map((term) => ({
+        term,
+        duplicate: existingTerms.has(term),
+      })),
+    [existingTerms, previewTerms],
+  );
+  const duplicateCount = previewRows.filter((row) => row.duplicate).length;
+  const importableCount = previewRows.length - duplicateCount;
+
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .getWords(profileId)
+      .then((words) => {
+        if (cancelled) return;
+        setExistingTerms(new Set(words.map((word) => word.thai.trim()).filter(Boolean)));
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setExistingTerms(new Set());
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [profileId]);
 
   async function handleImport() {
     if (!text.trim()) return;
@@ -233,13 +262,35 @@ export function AddWordsPage({ profileId }: { profileId: string }) {
             </button>
 
             <div className="glass-panel rounded-[24px] p-4 shadow-soft">
+              {previewRows.length > 0 ? (
+                <p className="mb-3 text-sm text-ink/60">
+                  {importableCount} new {importableCount === 1 ? "item" : "items"} ready to add
+                  {duplicateCount > 0 ? ` · ${duplicateCount} duplicate${duplicateCount === 1 ? "" : "s"} will be skipped` : ""}
+                </p>
+              ) : null}
               <div className="mt-1 max-h-[320px] space-y-2 overflow-y-auto pr-1">
-                {previewTerms.length === 0 ? (
+                {previewRows.length === 0 ? (
                   <p className="rounded-[18px] bg-white/60 px-4 py-3 text-sm text-ink/55">Paste a few lines to preview them here.</p>
                 ) : (
-                  previewTerms.map((term) => (
-                    <div key={term} className="rounded-[18px] bg-white/75 px-4 py-3 text-sm font-medium text-ink">
-                      {term}
+                  previewRows.map(({ term, duplicate }) => (
+                    <div
+                      key={term}
+                      className={`rounded-[18px] px-4 py-3 text-sm font-medium ${
+                        duplicate ? "bg-clay/10 text-ink/65" : "bg-white/75 text-ink"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <span>{term}</span>
+                        {duplicate ? (
+                          <span className="rounded-full bg-clay/15 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/60">
+                            Duplicate
+                          </span>
+                        ) : (
+                          <span className="rounded-full bg-moss/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-moss">
+                            New
+                          </span>
+                        )}
+                      </div>
                     </div>
                   ))
                 )}

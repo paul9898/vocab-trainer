@@ -64,7 +64,7 @@ export function DrillPage({ profileId }: { profileId: string }) {
 
   useEffect(() => {
     stopSpeaking();
-    if (currentQuestion) {
+    if (mode === "drill" && currentQuestion) {
       preloadSpeech(currentQuestion.thai, "word");
       requestAnimationFrame(() => {
         hotkeyAnchorRef.current?.focus({ preventScroll: true });
@@ -73,7 +73,22 @@ export function DrillPage({ profileId }: { profileId: string }) {
         speakWord(currentQuestion.thai);
       }
     }
-  }, [currentQuestion?.word_id]);
+  }, [currentQuestion?.word_id, mode]);
+
+  useEffect(() => {
+    if (mode !== "test" || !testSession.currentItem) {
+      return;
+    }
+    stopSpeaking();
+    preloadSpeech(testSession.currentItem.example_th, "sentence");
+    const timeout = window.setTimeout(() => {
+      speakSentence(testSession.currentItem.example_th);
+    }, 80);
+    requestAnimationFrame(() => {
+      hotkeyAnchorRef.current?.focus({ preventScroll: true });
+    });
+    return () => window.clearTimeout(timeout);
+  }, [mode, testSession.currentItem?.id]);
 
   function focusHotkeyAnchor() {
     requestAnimationFrame(() => {
